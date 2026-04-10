@@ -1,3 +1,18 @@
+# ── UI framework ──────────────────────────────────────────────────────────────
 customtkinter>=5.2.0
+
+# ── Image processing ──────────────────────────────────────────────────────────
 Pillow>=10.0.0
+
+# ── Drag & drop (optional, graceful fallback if not installed) ────────────────
 tkinterdnd2>=0.3.0
+
+# ── PDF operations ────────────────────────────────────────────────────────────
+pypdf>=4.0.0          # merge, split, encrypt, form fields
+reportlab>=4.0.0      # create PDF from images (no OCR path)
+
+# ── PDF text extraction (optional, better layout than pypdf) ──────────────────
+pdfplumber>=0.10.0
+
+# ── OCR — searchable PDF (optional, also needs Tesseract binary installed) ────
+# pytesseract>=0.3.10
