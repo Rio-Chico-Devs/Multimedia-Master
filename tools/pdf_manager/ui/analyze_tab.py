@@ -67,7 +67,7 @@ class AnalyzeTab(ctk.CTkFrame):
 
         self._placeholder = ctk.CTkLabel(
             self._results,
-            text="Seleziona un PDF e clicca "Analizza PDF" per iniziare.",
+            text='Seleziona un PDF e clicca "Analizza PDF" per iniziare.',
             text_color="gray",
             font=ctk.CTkFont(size=12),
         )
