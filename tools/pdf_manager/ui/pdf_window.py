@@ -1,11 +1,12 @@
 """
 PDF Manager main window.
-Five tabs inside a CTkTabview:
-  1. Converti    — images → PDF (with optional OCR)
-  2. Unisci      — merge multiple PDFs
-  3. Dividi      — split by ranges or every N pages
-  4. Proteggi    — encrypt / decrypt
-  5. Analizza    — text, metadata, form fields, summary
+Six tabs inside a CTkTabview:
+  1. Modifica    — visual editor (snip, drag, insert space)
+  2. Converti    — images → PDF (with optional OCR)
+  3. Unisci      — merge multiple PDFs
+  4. Dividi      — split by ranges or every N pages
+  5. Proteggi    — encrypt / decrypt
+  6. Analizza    — text, metadata, form fields, summary
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
+from .edit_tab    import EditTab
 from .convert_tab import ConvertTab
 from .merge_tab   import MergeTab
 from .split_tab   import SplitTab
@@ -78,8 +80,11 @@ class PdfWindow(ctk.CTk):
         tabs = ctk.CTkTabview(self, corner_radius=10)
         tabs.pack(fill="both", expand=True, padx=16, pady=(10, 16))
 
-        for name in ("Converti", "Unisci", "Dividi", "Proteggi", "Analizza"):
+        for name in ("Modifica", "Converti", "Unisci", "Dividi", "Proteggi", "Analizza"):
             tabs.add(name)
+
+        # Modifica tab (visual editor) — first so it's prominent
+        EditTab(tabs.tab("Modifica")).pack(fill="both", expand=True)
 
         # Instantiate each tab and keep references to their file lists
         convert = ConvertTab(tabs.tab("Converti"))
