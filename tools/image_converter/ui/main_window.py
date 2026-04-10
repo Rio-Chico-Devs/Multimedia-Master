@@ -33,11 +33,20 @@ class MainWindow(ctk.CTk):
     def _init_dnd(self) -> None:
         self._dnd_available = False
         try:
-            from tkinterdnd2 import TkinterDnD
+            from tkinterdnd2 import TkinterDnD, DND_FILES
             TkinterDnD._require(self)
+            # Register the entire window so drops work anywhere,
+            # regardless of which internal Canvas/Frame is under the cursor.
+            self.tk.call("tkdnd::drop_target", "register", self._w, DND_FILES)
+            self.bind("<<Drop>>", self._on_window_drop)
             self._dnd_available = True
         except Exception:
             pass   # app works fine without drag & drop
+
+    def _on_window_drop(self, event) -> None:
+        """Forward window-level drops to the file panel."""
+        if hasattr(self, "_file_panel"):
+            self._file_panel._on_drop(event)
 
     # ── Layout ─────────────────────────────────────────────────────────────────
 
