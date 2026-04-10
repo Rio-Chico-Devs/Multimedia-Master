@@ -6,14 +6,15 @@ from core.formats import (
     OUTPUT_FORMATS, QUALITY_DEFAULTS, QUALITY_HINTS,
     NO_QUALITY_FORMATS, ConversionConfig,
 )
+from core.profiles import PROFILE_NAMES, get_profile
 from ui.widgets import SectionLabel, Separator
 
 
 class SettingsSidebar(ctk.CTkFrame):
     """
-    Right panel — format selector, quality slider, optional resize,
-    metadata toggle, and output directory chooser.
-    Exposes a single get_config() method used by MainWindow.
+    Right panel — profile selector, format, quality, optional resize,
+    metadata toggle, output directory chooser.
+    Exposes get_config() → ConversionConfig used by MainWindow.
     """
 
     def __init__(self, parent, **kw):
@@ -22,12 +23,12 @@ class SettingsSidebar(ctk.CTkFrame):
         self.grid_propagate(False)
         self.grid_columnconfigure(0, weight=1)
         self._output_dir: Path | None = None
+        self._applying_profile = False   # guard against recursive callbacks
         self._build()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def get_config(self) -> ConversionConfig:
-        """Snapshot the current UI state into a ConversionConfig dataclass."""
         return ConversionConfig(
             format=self._fmt_var.get(),
             quality=int(self._quality_slider.get()),
@@ -42,8 +43,10 @@ class SettingsSidebar(ctk.CTkFrame):
     def _build(self) -> None:
         ctk.CTkLabel(self, text="Impostazioni",
                      font=ctk.CTkFont(size=16, weight="bold")).pack(
-            pady=(18, 10), padx=18)
+            pady=(18, 6), padx=18)
 
+        self._build_profiles()
+        Separator(self).pack()
         self._build_format()
         self._build_quality()
         Separator(self).pack()
@@ -52,6 +55,24 @@ class SettingsSidebar(ctk.CTkFrame):
         self._build_options()
         Separator(self).pack()
         self._build_output_dir()
+
+    def _build_profiles(self) -> None:
+        SectionLabel(self, text="Profilo").pack(fill="x", padx=18, pady=(6, 2))
+
+        self._profile_var = ctk.StringVar(value="Personalizzato")
+        ctk.CTkOptionMenu(
+            self, values=PROFILE_NAMES,
+            variable=self._profile_var,
+            command=self._on_profile_change,
+            dynamic_resizing=False,
+        ).pack(fill="x", padx=18, pady=(0, 2))
+
+        self._profile_hint = ctk.CTkLabel(
+            self, text="Usa le impostazioni manuali",
+            text_color="gray", font=ctk.CTkFont(size=10),
+            anchor="w", wraplength=220, justify="left",
+        )
+        self._profile_hint.pack(fill="x", padx=18, pady=(0, 4))
 
     def _build_format(self) -> None:
         SectionLabel(self, text="Formato output").pack(
@@ -109,7 +130,9 @@ class SettingsSidebar(ctk.CTkFrame):
         SectionLabel(self, text="Opzioni").pack(fill="x", padx=18, pady=(10, 4))
         self._strip_var = ctk.BooleanVar(value=True)
         ctk.CTkCheckBox(self, text="Rimuovi metadati EXIF",
-                        variable=self._strip_var).pack(fill="x", padx=18, pady=2)
+                        variable=self._strip_var,
+                        command=self._on_manual_change).pack(
+            fill="x", padx=18, pady=2)
 
     def _build_output_dir(self) -> None:
         SectionLabel(self, text="Cartella output").pack(
@@ -129,6 +152,37 @@ class SettingsSidebar(ctk.CTkFrame):
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
 
+    def _on_profile_change(self, name: str) -> None:
+        profile = get_profile(name)
+        if not profile or name == "Personalizzato":
+            self._profile_hint.configure(text="Usa le impostazioni manuali")
+            return
+
+        self._applying_profile = True
+        cfg = profile.config
+
+        # format
+        self._fmt_var.set(cfg.format)
+        self._on_format_change(cfg.format)
+
+        # quality
+        self._quality_slider.set(cfg.quality)
+        self._quality_lbl.configure(text=f"Qualità: {cfg.quality}")
+
+        # resize
+        self._w_entry.delete(0, "end")
+        self._h_entry.delete(0, "end")
+        if cfg.target_w:
+            self._w_entry.insert(0, str(cfg.target_w))
+        if cfg.target_h:
+            self._h_entry.insert(0, str(cfg.target_h))
+
+        # metadata
+        self._strip_var.set(cfg.strip_meta)
+
+        self._profile_hint.configure(text=profile.description)
+        self._applying_profile = False
+
     def _on_format_change(self, fmt: str) -> None:
         q = QUALITY_DEFAULTS.get(fmt, 85)
         self._quality_slider.set(q)
@@ -136,9 +190,17 @@ class SettingsSidebar(ctk.CTkFrame):
         self._quality_hint.configure(text=QUALITY_HINTS.get(fmt, ""))
         self._quality_slider.configure(
             state="disabled" if fmt in NO_QUALITY_FORMATS else "normal")
+        self._on_manual_change()
 
     def _on_quality_change(self, val) -> None:
         self._quality_lbl.configure(text=f"Qualità: {int(val)}")
+        self._on_manual_change()
+
+    def _on_manual_change(self) -> None:
+        """Any manual edit switches the profile selector to 'Personalizzato'."""
+        if not self._applying_profile:
+            self._profile_var.set("Personalizzato")
+            self._profile_hint.configure(text="Usa le impostazioni manuali")
 
     def _choose_dir(self) -> None:
         d = filedialog.askdirectory(title="Scegli cartella di output")
