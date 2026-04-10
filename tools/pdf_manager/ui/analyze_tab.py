@@ -18,7 +18,7 @@ import customtkinter as ctk
 
 from .file_widgets  import SingleFilePicker
 from .widgets       import SectionLabel, Separator, StatusBar
-from ..core.pdf_engine import PdfEngine, PdfAnalysis
+from core.pdf_engine import PdfEngine, PdfAnalysis
 
 
 class AnalyzeTab(ctk.CTkFrame):

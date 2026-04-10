@@ -12,7 +12,7 @@ import customtkinter as ctk
 
 from .file_widgets import PdfMergeList
 from .widgets      import SectionLabel, Separator, StatusBar
-from ..core.pdf_engine import PdfEngine
+from core.pdf_engine import PdfEngine
 
 
 class MergeTab(ctk.CTkFrame):

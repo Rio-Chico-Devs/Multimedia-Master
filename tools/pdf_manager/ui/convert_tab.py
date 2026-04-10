@@ -14,7 +14,7 @@ import customtkinter as ctk
 
 from .file_widgets import ImageFileList
 from .widgets      import SectionLabel, Separator, StatusBar
-from ..core.pdf_engine import PdfEngine
+from core.pdf_engine import PdfEngine
 
 
 class ConvertTab(ctk.CTkFrame):
