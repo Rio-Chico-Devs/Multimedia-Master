@@ -111,6 +111,24 @@ class PageState:
 
         return snip
 
+    def copy(self, x0: int, y0: int, x1: int, y1: int) -> Snippet | None:
+        """
+        Duplicate [x0,y0 → x1,y1] without erasing the source.
+        Returns a new Snippet placed on top of the original area.
+        """
+        x0, x1 = sorted((x0, x1))
+        y0, y1 = sorted((y0, y1))
+        if x1 - x0 < 4 or y1 - y0 < 4:
+            return None
+
+        self._push_undo()
+
+        region = self.compose().crop((x0, y0, x1, y1))
+        snip   = Snippet(image=region.copy(), x=x0, y=y0)
+        self.snippets.append(snip)
+        # Source area is NOT erased — original stays visible underneath
+        return snip
+
     def insert_space(self, y: int, amount: int) -> None:
         """
         Insert (amount > 0) or remove (amount < 0) horizontal whitespace

@@ -75,9 +75,13 @@ class EditorCanvas(tk.Frame):
         # Interaction state
         self._press_cx    = 0   # canvas coords at mouse press
         self._press_cy    = 0
-        self._rb_item:  int | None = None   # rubber-band rect
-        self._drag_info: tuple | None = None  # (item_id, border_id, Snippet, off_px, off_py)
-        self._space_items: list[int] = []    # canvas items for space guide
+        self._rb_item:    int | None = None   # rubber-band rect
+        self._drag_info:  tuple | None = None
+        self._space_items: list[int] = []
+
+        # Pending snip: set after rubber-band, cleared after choice
+        self._pending_sel: tuple[int,int,int,int] | None = None  # page coords
+        self._choice_win:  int | None = None   # canvas window item id
 
         self._build()
 
@@ -222,6 +226,9 @@ class EditorCanvas(tk.Frame):
     # ── Mouse: PRESS ───────────────────────────────────────────────────────
 
     def _on_press(self, event):
+        # Cancel any pending choice panel before starting a new action
+        self._cancel_choice()
+
         self._press_cx = event.x
         self._press_cy = event.y
         px, py = self._c2p(event.x, event.y)
@@ -299,16 +306,16 @@ class EditorCanvas(tk.Frame):
 
         # ── Snip ──────────────────────────────────────────────────────────
         if self._mode == "snip" and self._rb_item:
-            self._cv.delete(self._rb_item)
-            self._rb_item = None
             x0, x1 = sorted((ppx, px))
             y0, y1 = sorted((ppy, py))
-            if self._state:
-                snip = self._state.snip(x0, y0, x1, y1)
-                if snip:
-                    self._render_bg()        # refresh white-erased area
-                    self._add_snip_item(snip)
-                    self._on_change()
+            if x1 - x0 < 4 or y1 - y0 < 4:
+                # Too small — cancel
+                self._cv.delete(self._rb_item)
+                self._rb_item = None
+            else:
+                # Keep the rubber-band visible and show choice panel
+                self._pending_sel = (x0, y0, x1, y1)
+                self._show_choice_panel(event.x, event.y)
 
         # ── Drag ──────────────────────────────────────────────────────────
         elif self._mode == "drag" and self._drag_info:
@@ -325,3 +332,97 @@ class EditorCanvas(tk.Frame):
                 self._state.insert_space(ppy, amount)
                 self._full_render()
                 self._on_change()
+
+    # ── Choice panel (Ritaglia / Copia) ────────────────────────────────────
+
+    def _show_choice_panel(self, mouse_x: int, mouse_y: int) -> None:
+        """Show a floating panel near the selection asking Ritaglia or Copia."""
+        if not self._pending_sel:
+            return
+
+        frame = tk.Frame(self._cv, bg="#1e1e1e", relief="solid", bd=1)
+
+        # ── Ritaglia button ───────────────────────────────────────────────
+        tk.Button(
+            frame,
+            text="✂  Ritaglia",
+            command=self._do_cut,
+            bg="#1f5a8a", fg="white", activebackground="#174a72",
+            activeforeground="white", relief="flat",
+            font=("Arial", 11, "bold"), padx=14, pady=7,
+            cursor="hand2", bd=0,
+        ).pack(side="left", padx=(6, 2), pady=6)
+
+        # ── Separator ─────────────────────────────────────────────────────
+        tk.Frame(frame, width=1, bg="#444").pack(
+            side="left", fill="y", pady=6)
+
+        # ── Copia button ──────────────────────────────────────────────────
+        tk.Button(
+            frame,
+            text="⎘  Copia",
+            command=self._do_copy,
+            bg="#1f6a3a", fg="white", activebackground="#175530",
+            activeforeground="white", relief="flat",
+            font=("Arial", 11, "bold"), padx=14, pady=7,
+            cursor="hand2", bd=0,
+        ).pack(side="left", padx=(2, 2), pady=6)
+
+        # ── Separator ─────────────────────────────────────────────────────
+        tk.Frame(frame, width=1, bg="#444").pack(
+            side="left", fill="y", pady=6)
+
+        # ── Cancel button ─────────────────────────────────────────────────
+        tk.Button(
+            frame,
+            text="✕",
+            command=self._cancel_choice,
+            bg="#3a1f1f", fg="white", activebackground="#2a1515",
+            activeforeground="white", relief="flat",
+            font=("Arial", 11), padx=10, pady=7,
+            cursor="hand2", bd=0,
+        ).pack(side="left", padx=(2, 6), pady=6)
+
+        # Place panel just below the bottom-right corner of the selection
+        x0, y0, x1, y1 = self._pending_sel
+        panel_cx = int(x0 * self._zoom)          # left-align with selection
+        panel_cy = int(y1 * self._zoom) + 6      # just below selection
+
+        self._choice_win = self._cv.create_window(
+            panel_cx, panel_cy, anchor="nw",
+            window=frame, tags="choice_panel")
+
+    def _do_cut(self) -> None:
+        """User chose Ritaglia — erase source."""
+        sel = self._pending_sel
+        self._dismiss_choice()
+        if sel and self._state:
+            snip = self._state.snip(*sel)
+            if snip:
+                self._render_bg()
+                self._add_snip_item(snip)
+                self._on_change()
+
+    def _do_copy(self) -> None:
+        """User chose Copia — keep source intact."""
+        sel = self._pending_sel
+        self._dismiss_choice()
+        if sel and self._state:
+            snip = self._state.copy(*sel)
+            if snip:
+                self._add_snip_item(snip)
+                self._on_change()
+
+    def _dismiss_choice(self) -> None:
+        """Remove choice panel and rubber-band (after a decision was made)."""
+        if self._choice_win is not None:
+            self._cv.delete(self._choice_win)
+            self._choice_win = None
+        if self._rb_item is not None:
+            self._cv.delete(self._rb_item)
+            self._rb_item = None
+        self._pending_sel = None
+
+    def _cancel_choice(self) -> None:
+        """Remove choice panel and rubber-band without performing any action."""
+        self._dismiss_choice()
