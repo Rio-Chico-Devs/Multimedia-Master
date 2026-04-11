@@ -1,8 +1,10 @@
 import sys
 from pathlib import Path
 
-# Always resolve imports relative to this tool's directory
+# Tool-local imports (core/, ui/)
 sys.path.insert(0, str(Path(__file__).parent))
+# Shared imports (common/)
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import customtkinter as ctk
 from ui.pdf_window import PdfWindow

@@ -171,6 +171,7 @@ class EditorCanvas(tk.Frame):
         for row in self._snip_items:
             self._cv.delete(row[0])   # image item
             self._cv.delete(row[1])   # border rect
+            row[2] = None             # release PhotoImage (helps Tk GC)
         self._snip_items.clear()
 
         if not self._state:
@@ -281,7 +282,8 @@ class EditorCanvas(tk.Frame):
             self._space_items = self._space_items[:1]
 
             pw     = (self._state.size[0] * self._zoom) if self._state else 800
-            amount = int((event.y - self._press_cy) / self._zoom)
+            # Delta in canvas coords (scroll offset cancels in subtraction)
+            amount = int((self._cy(event.y) - self._cy(self._press_cy)) / self._zoom)
             mid_x  = pw / 2
 
             # Arrow from press line to current y
@@ -327,7 +329,7 @@ class EditorCanvas(tk.Frame):
             for item in self._space_items:
                 self._cv.delete(item)
             self._space_items = []
-            amount = int((event.y - self._press_cy) / self._zoom)
+            amount = int((self._cy(event.y) - self._cy(self._press_cy)) / self._zoom)
             if self._state and abs(amount) > 2:
                 self._state.insert_space(ppy, amount)
                 self._full_render()

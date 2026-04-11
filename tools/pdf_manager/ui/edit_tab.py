@@ -57,6 +57,14 @@ class EditTab(ctk.CTkFrame):
         self._set_mode("snip")          # default mode
         self._set_controls_state(False) # disabled until PDF opened
 
+        # Keyboard shortcuts (bind_all so they work regardless of focus)
+        self.bind_all("<Control-z>", lambda _: self._undo(), add="+")
+        self.bind_all("<Control-Z>", lambda _: self._undo(), add="+")
+        self.bind_all("<Control-s>", lambda _: self._save_pdf(), add="+")
+        self.bind_all("<Control-S>", lambda _: self._save_pdf(), add="+")
+        self.bind_all("<Prior>",     lambda _: self._prev_page(), add="+")  # PgUp
+        self.bind_all("<Next>",      lambda _: self._next_page(), add="+")  # PgDn
+
     # ── Toolbar ────────────────────────────────────────────────────────────
 
     def _build_toolbar(self):
