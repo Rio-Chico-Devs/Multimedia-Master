@@ -120,13 +120,7 @@ class ImageFileList(ctk.CTkFrame):
         self._scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self._show_placeholder()
 
-        # DnD
-        if _DND:
-            try:
-                self._scroll.drop_target_register(dnd.DND_FILES)  # type: ignore
-                self._scroll.dnd_bind("<<Drop>>", self._on_drop)
-            except Exception:
-                pass
+        # DnD is handled at window level (see pdf_window.py)
 
     def _show_placeholder(self):
         for w in self._scroll.winfo_children():
@@ -303,12 +297,7 @@ class PdfMergeList(ctk.CTkFrame):
         self._scroll.pack(fill="both", expand=True, padx=8, pady=(0, 8))
         self._show_placeholder()
 
-        if _DND:
-            try:
-                self._scroll.drop_target_register(dnd.DND_FILES)  # type: ignore
-                self._scroll.dnd_bind("<<Drop>>", self._on_drop)
-            except Exception:
-                pass
+        # DnD is handled at window level (see pdf_window.py)
 
     def _show_placeholder(self):
         for w in self._scroll.winfo_children():
@@ -463,13 +452,7 @@ class SingleFilePicker(ctk.CTkFrame):
         ctk.CTkButton(row, text="Sfoglia", width=72, height=28,
                       command=self._browse).grid(row=0, column=1, padx=(6, 0))
 
-        # DnD on the label area
-        if _DND:
-            try:
-                self._path_lbl.drop_target_register(dnd.DND_FILES)  # type: ignore
-                self._path_lbl.dnd_bind("<<Drop>>", self._on_drop)
-            except Exception:
-                pass
+        # DnD is handled at window level (see pdf_window.py)
 
     def _browse(self):
         from tkinter import filedialog

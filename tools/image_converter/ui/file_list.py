@@ -51,17 +51,8 @@ class FileListPanel(ctk.CTkFrame):
         self._refresh_count()
 
     def enable_drop(self, dnd_available: bool) -> None:
-        """Called by MainWindow after TkinterDnD is initialised."""
-        if not dnd_available:
-            return
-        try:
-            from tkinterdnd2 import DND_FILES
-            self._drop_zone.drop_target_register(DND_FILES)
-            self._drop_zone.dnd_bind("<<Drop>>", self._on_drop)
-            self._list_frame.drop_target_register(DND_FILES)
-            self._list_frame.dnd_bind("<<Drop>>", self._on_drop)
-        except Exception:
-            pass
+        """Called by MainWindow after TkinterDnD is initialised (no-op: window handles drops)."""
+        pass
 
     def set_progress(self, value: float) -> None:
         self._progress.set(value)

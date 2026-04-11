@@ -11,6 +11,9 @@ tkinterdnd2>=0.3.0
 pypdf>=4.0.0          # merge, split, encrypt, form fields
 reportlab>=4.0.0      # create PDF from images (no OCR path)
 
+# ── PDF visual editor — render pages as images for the Modifica tab ──────────
+pymupdf>=1.23.0        # pip install pymupdf  (also known as fitz)
+
 # ── PDF text extraction (optional, better layout than pypdf) ──────────────────
 pdfplumber>=0.10.0
 
