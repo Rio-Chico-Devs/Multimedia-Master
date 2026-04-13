@@ -55,7 +55,7 @@ class Launcher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Multimedia Master")
-        self.geometry("660x360")
+        self.geometry("900x360")
         self.resizable(False, False)
         self._processes: list[subprocess.Popen] = []
         self._build()
@@ -71,8 +71,8 @@ class Launcher(ctk.CTk):
                      font=ctk.CTkFont(size=12)).pack(pady=(0, 22))
 
         cards = ctk.CTkFrame(self, fg_color="transparent")
-        cards.pack(fill="x", padx=50)
-        cards.grid_columnconfigure((0, 1), weight=1)
+        cards.pack(fill="x", padx=40)
+        cards.grid_columnconfigure((0, 1, 2), weight=1)
 
         _ToolCard(
             cards,
@@ -81,7 +81,7 @@ class Launcher(ctk.CTk):
             features=["JPG · PNG · WebP · AVIF", "Comprimi · Ridimensiona",
                       "Profili · Anteprima"],
             on_click=self._launch_image_converter,
-        ).grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        ).grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
         _ToolCard(
             cards,
@@ -90,7 +90,16 @@ class Launcher(ctk.CTk):
             features=["Converti · OCR · Unisci", "Dividi · Proteggi",
                       "Analizza · Sintesi"],
             on_click=self._launch_pdf_manager,
-        ).grid(row=0, column=1, sticky="nsew", padx=(10, 0))
+        ).grid(row=0, column=1, sticky="nsew", padx=8)
+
+        _ToolCard(
+            cards,
+            icon="🎵",
+            title="Audio Manager",
+            features=["Converti · Estrai da video", "Riduzione rumore · EQ",
+                      "Separa tracce · Metadati"],
+            on_click=self._launch_audio_manager,
+        ).grid(row=0, column=2, sticky="nsew", padx=(8, 0))
 
         ctk.CTkLabel(self, text="v2.0  ·  open source  ·  nessuna connessione richiesta",
                      text_color="#333",
@@ -112,6 +121,9 @@ class Launcher(ctk.CTk):
 
     def _launch_pdf_manager(self) -> None:
         self._launch("pdf_manager")
+
+    def _launch_audio_manager(self) -> None:
+        self._launch("audio_manager")
 
     # ── Close ──────────────────────────────────────────────────────────────────
 
