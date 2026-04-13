@@ -104,7 +104,8 @@ class AudioEngine:
             try:
                 result = subprocess.run(
                     [self._ffmpeg, "-i", str(path)],
-                    stderr=subprocess.PIPE, stdout=subprocess.DEVNULL, text=True,
+                    stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    encoding="utf-8", errors="replace",
                 )
                 for line in result.stderr.splitlines():
                     if "Duration:" in line and duration_s == 0.0:
@@ -190,7 +191,8 @@ class AudioEngine:
                 cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             if proc.returncode != 0:
                 # Return last 300 chars of stderr for a useful error message
@@ -227,7 +229,8 @@ class AudioEngine:
                 cmd,
                 stderr=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace",
             )
             duration_s = 0.0
             for line in (proc.stderr or []):
@@ -474,7 +477,8 @@ class AudioEngine:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace",
             )
             for line in (proc.stdout or []):
                 line = line.strip()
