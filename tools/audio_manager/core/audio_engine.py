@@ -594,6 +594,123 @@ class AudioEngine:
                 base64.b64encode(pic.write()).decode("ascii")]
             tags.save()
 
+    def strip_tags(self, path: Path) -> AudioResult:
+        """Remove ALL metadata tags from the file (modifies in place)."""
+        try:
+            import mutagen
+            mf = mutagen.File(str(path))
+            if not mf:
+                return AudioResult(output=path, success=False,
+                                   error="Formato non supportato da mutagen.")
+            if mf.tags:
+                mf.tags.clear()
+                mf.save()
+            return AudioResult(output=path, success=True)
+        except Exception as exc:
+            return AudioResult(output=path, success=False, error=str(exc))
+
+    def analyze_file(self, path: Path) -> dict:
+        """
+        Health and safety analysis of an audio file.
+        Returns {"safe": bool, "issues": list[str], "details": list[str]}
+        """
+        issues:  list[str] = []
+        details: list[str] = []
+
+        # 1 — File size sanity
+        try:
+            size = path.stat().st_size
+            if size == 0:
+                issues.append("File vuoto (0 byte)")
+            elif size < 512:
+                issues.append(f"File sospettosamente piccolo ({size} byte)")
+            else:
+                details.append(f"Dimensione: {size / 1024:.1f} KB")
+        except Exception as e:
+            issues.append(f"Impossibile leggere il file: {e}")
+
+        # 2 — Magic bytes vs extension
+        _MAGIC: dict[str, list[tuple[int, bytes]]] = {
+            ".mp3":  [(0, b"ID3"), (0, b"\xff\xfb"), (0, b"\xff\xfa"),
+                      (0, b"\xff\xf3"), (0, b"\xff\xf2")],
+            ".flac": [(0, b"fLaC")],
+            ".ogg":  [(0, b"OggS")],
+            ".opus": [(0, b"OggS")],
+            ".wav":  [(0, b"RIFF")],
+            ".m4a":  [(4, b"ftyp")],
+            ".mp4":  [(4, b"ftyp")],
+            ".aac":  [(0, b"\xff\xf1"), (0, b"\xff\xf9")],
+        }
+        try:
+            header = path.read_bytes()[:12]
+            ext    = path.suffix.lower()
+            checks = _MAGIC.get(ext, [])
+            if checks:
+                ok = any(header[off:off + len(sig)] == sig
+                         for off, sig in checks)
+                if ok:
+                    details.append("Intestazione file corretta")
+                else:
+                    issues.append(
+                        f"Intestazione non corrisponde all'estensione {ext} "
+                        "(il file potrebbe essere rinominato o corrotto)")
+        except Exception as e:
+            issues.append(f"Impossibile leggere l'intestazione: {e}")
+
+        # 3 — Full decode check via ffmpeg
+        if self._ffmpeg:
+            try:
+                res = subprocess.run(
+                    [self._ffmpeg, "-v", "error", "-i", str(path),
+                     "-f", "null", "-"],
+                    stderr=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    encoding="utf-8", errors="replace",
+                    timeout=60,
+                )
+                if res.returncode == 0:
+                    details.append("Decodifica ffmpeg: nessun errore")
+                else:
+                    stderr = (res.stderr or "").strip()
+                    snippet = stderr[-300:] if len(stderr) > 300 else stderr
+                    issues.append(f"Errori di decodifica: {snippet}")
+            except subprocess.TimeoutExpired:
+                issues.append("Timeout verifica — file potenzialmente corrotto")
+            except Exception as e:
+                issues.append(f"Errore durante la verifica: {e}")
+        else:
+            details.append("ffmpeg non disponibile — verifica decodifica saltata")
+
+        # 4 — Tag content safety
+        try:
+            import mutagen
+            mf = mutagen.File(str(path), easy=True)
+            if mf and mf.tags:
+                n = len(mf.tags)
+                details.append(f"Tag presenti: {n}")
+                for key, value in mf.tags.items():
+                    v = str(value[0]) if isinstance(value, (list, tuple)) else str(value)
+                    if len(v) > 1000:
+                        issues.append(
+                            f"Tag '{key}' insolitamente lungo ({len(v)} caratteri)")
+                    lower = v.lower()
+                    if any(x in lower for x in
+                           ("javascript:", "<script", "vbscript:")):
+                        issues.append(
+                            f"Tag '{key}' contiene contenuto script: {v[:80]}")
+                    elif any(x in lower for x in ("http://", "https://")):
+                        details.append(f"Tag '{key}' contiene URL (non pericoloso)")
+            else:
+                details.append("Nessun tag trovato")
+        except Exception as e:
+            details.append(f"Lettura tag non disponibile: {e}")
+
+        return {
+            "safe":    len(issues) == 0,
+            "issues":  issues,
+            "details": details,
+        }
+
     # ── Internal helpers ──────────────────────────────────────────────────
 
     @staticmethod
