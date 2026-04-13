@@ -118,8 +118,10 @@ class SettingsSidebar(ctk.CTkFrame):
 
         self._w_entry = ctk.CTkEntry(grid, placeholder_text="es. 1920")
         self._w_entry.grid(row=1, column=0, padx=(0, 4), pady=2, sticky="ew")
+        self._w_entry.bind("<FocusOut>", lambda _: self._validate_dim(self._w_entry))
         self._h_entry = ctk.CTkEntry(grid, placeholder_text="es. 1080")
         self._h_entry.grid(row=1, column=1, pady=2, sticky="ew")
+        self._h_entry.bind("<FocusOut>", lambda _: self._validate_dim(self._h_entry))
 
         ctk.CTkLabel(
             self, text="Mantiene proporzioni · non ingrandisce mai",
@@ -213,6 +215,14 @@ class SettingsSidebar(ctk.CTkFrame):
         self._outdir_lbl.configure(text="Stessa cartella dei file originali")
 
     # ── Helpers ────────────────────────────────────────────────────────────────
+
+    def _validate_dim(self, entry: ctk.CTkEntry) -> None:
+        """Highlight entry in red if value is non-empty and non-numeric."""
+        val = entry.get().strip()
+        if val and self._parse_int(val) is None:
+            entry.configure(border_color="#f44336")   # red
+        else:
+            entry.configure(border_color=["#979DA2", "#565B5E"])  # CTk default
 
     @staticmethod
     def _parse_int(value: str) -> int | None:

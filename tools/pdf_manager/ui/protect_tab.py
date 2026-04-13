@@ -215,6 +215,7 @@ class ProtectTab(ctk.CTkFrame):
             )
             if result.success:
                 self.after(0, self._status.ok, f"Salvato: {output.name}")
+                self.after(0, self._clear_passwords)
             else:
                 self.after(0, self._status.err, result.error)
         except Exception as exc:
@@ -243,7 +244,14 @@ class ProtectTab(ctk.CTkFrame):
             result = self._engine.unlock(pdf, password, output)
             if result.success:
                 self.after(0, self._status.ok, f"Salvato: {output.name}")
+                self.after(0, self._clear_passwords)
             else:
                 self.after(0, self._status.err, result.error)
         except Exception as exc:
             self.after(0, self._status.err, str(exc))
+
+    def _clear_passwords(self):
+        """Zero out password fields after a successful operation."""
+        self._user_pw.delete(0, "end")
+        self._owner_pw.delete(0, "end")
+        self._unlock_pw.delete(0, "end")

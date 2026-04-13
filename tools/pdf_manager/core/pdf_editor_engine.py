@@ -64,7 +64,7 @@ class PageState:
     def __init__(self, base: Image.Image):
         self._bg      = base.convert("RGB")
         self.snippets: list[Snippet] = []
-        self._undo:    list[tuple[Image.Image, list[Snippet]]] = []
+        self._undo:    list[tuple[bytes, list[Snippet]]] = []
 
     # ── Compose ───────────────────────────────────────────────────────────
 
@@ -146,9 +146,9 @@ class PageState:
     def undo(self) -> bool:
         if not self._undo:
             return False
-        bg, snips   = self._undo.pop()
-        self._bg    = bg
-        self.snippets = snips
+        bg_bytes, snips = self._undo.pop()
+        self._bg        = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
+        self.snippets   = snips
         return True
 
     # ── Internal ──────────────────────────────────────────────────────────
@@ -157,7 +157,11 @@ class PageState:
         if len(self._undo) >= self.MAX_UNDO:
             self._undo.pop(0)
         snips_copy = [s.clone() for s in self.snippets]
-        self._undo.append((self._bg.copy(), snips_copy))
+        # Compress to PNG bytes: ~5–15× smaller than raw pixels in RAM
+        # (a 150 DPI A4 page: ~5.6 MB raw → ~300–600 KB compressed)
+        buf = io.BytesIO()
+        self._bg.save(buf, format="PNG", optimize=True, compress_level=6)
+        self._undo.append((buf.getvalue(), snips_copy))
 
     @property
     def size(self) -> tuple[int, int]:
