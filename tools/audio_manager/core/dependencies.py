@@ -24,14 +24,14 @@ class DepStatus:
 
 
 def _has_ffmpeg() -> bool:
-    """True if ffmpeg is available either in PATH or via imageio-ffmpeg."""
-    if shutil.which("ffmpeg"):
-        return True
+    """True if ffmpeg is available via imageio-ffmpeg or system PATH."""
     try:
         import imageio_ffmpeg
-        return bool(imageio_ffmpeg.get_ffmpeg_exe())
+        if imageio_ffmpeg.get_ffmpeg_exe():
+            return True
     except Exception:
-        return False
+        pass
+    return shutil.which("ffmpeg") is not None
 
 
 def check() -> DepStatus:

@@ -63,15 +63,11 @@ class AudioEngine:
     def _find_ffmpeg() -> str | None:
         """
         Locate ffmpeg in order of preference:
-          1. System PATH  (installed globally)
-          2. imageio-ffmpeg bundled binary  (pip install imageio-ffmpeg)
+          1. imageio-ffmpeg bundled binary  (pip install imageio-ffmpeg)
+          2. System PATH  (fallback if imageio-ffmpeg is not installed)
         Returns the full path string or None if neither is available.
         """
-        # 1 — system PATH
-        path = shutil.which("ffmpeg")
-        if path:
-            return path
-        # 2 — imageio-ffmpeg (ships its own static ffmpeg build)
+        # 1 — imageio-ffmpeg (bundled static build, no system install needed)
         try:
             import imageio_ffmpeg
             path = imageio_ffmpeg.get_ffmpeg_exe()
@@ -79,7 +75,8 @@ class AudioEngine:
                 return path
         except Exception:
             pass
-        return None
+        # 2 — system PATH fallback
+        return shutil.which("ffmpeg")
 
     # ── Probe ─────────────────────────────────────────────────────────────
 
