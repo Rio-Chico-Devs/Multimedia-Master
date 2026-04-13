@@ -23,12 +23,23 @@ class DepStatus:
     demucs:      bool   # pip (optional — requires PyTorch)
 
 
+def _has_ffmpeg() -> bool:
+    """True if ffmpeg is available either in PATH or via imageio-ffmpeg."""
+    if shutil.which("ffmpeg"):
+        return True
+    try:
+        import imageio_ffmpeg
+        return bool(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        return False
+
+
 def check() -> DepStatus:
     def _pkg(name: str) -> bool:
         return importlib.util.find_spec(name) is not None
 
     return DepStatus(
-        ffmpeg=      shutil.which("ffmpeg") is not None,
+        ffmpeg=      _has_ffmpeg(),
         pydub=       _pkg("pydub"),
         soundfile=   _pkg("soundfile"),
         noisereduce= _pkg("noisereduce"),
@@ -56,7 +67,7 @@ def install_hint(status: DepStatus) -> str:
         lines.append(f"pip install {' '.join(m)}")
     if not status.ffmpeg:
         lines.append(
-            "ffmpeg: installa da https://ffmpeg.org  "
-            "oppure  winget install ffmpeg  /  apt install ffmpeg"
+            "ffmpeg mancante — soluzione più semplice:  "
+            "pip install imageio-ffmpeg"
         )
     return "\n".join(lines)

@@ -21,7 +21,8 @@ pdfplumber>=0.10.0
 # pytesseract>=0.3.10
 
 # ── Audio Manager ─────────────────────────────────────────────────────────────
-pydub>=0.25.1           # audio manipulation (needs ffmpeg binary in PATH)
+pydub>=0.25.1           # audio manipulation
+imageio-ffmpeg>=0.4.9   # ffmpeg bundled — nessuna installazione manuale necessaria
 soundfile>=0.12.1       # lossless audio read/write (WAV, FLAC, OGG)
 noisereduce>=3.0.0      # spectral gating noise reduction
 numpy>=1.26.0           # array operations (shared dep)

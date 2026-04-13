@@ -2,7 +2,9 @@
 Audio Engine — all business logic, zero UI dependencies.
 
 Dependencies:
-  required  : pydub (+ ffmpeg binary in PATH), soundfile, numpy
+  required  : pydub, soundfile, numpy
+  ffmpeg    : resolved automatically — system PATH first, then imageio-ffmpeg
+              (pip install imageio-ffmpeg) so no manual install is needed
   optional  : noisereduce (enhance), scipy (EQ), mutagen (tags), demucs (stems)
 
 Every public method returns an AudioResult (or AudioInfo for probe).
@@ -48,13 +50,36 @@ class AudioEngine:
     """Stateless audio processing engine."""
 
     def __init__(self):
-        self._ffmpeg: str | None = shutil.which("ffmpeg")
+        self._ffmpeg: str | None = self._find_ffmpeg()
         if self._ffmpeg:
             try:
                 from pydub import AudioSegment
                 AudioSegment.converter = self._ffmpeg
+                AudioSegment.ffprobe   = self._ffmpeg.replace("ffmpeg", "ffprobe")
             except ImportError:
                 pass
+
+    @staticmethod
+    def _find_ffmpeg() -> str | None:
+        """
+        Locate ffmpeg in order of preference:
+          1. System PATH  (installed globally)
+          2. imageio-ffmpeg bundled binary  (pip install imageio-ffmpeg)
+        Returns the full path string or None if neither is available.
+        """
+        # 1 — system PATH
+        path = shutil.which("ffmpeg")
+        if path:
+            return path
+        # 2 — imageio-ffmpeg (ships its own static ffmpeg build)
+        try:
+            import imageio_ffmpeg
+            path = imageio_ffmpeg.get_ffmpeg_exe()
+            if path:
+                return path
+        except Exception:
+            pass
+        return None
 
     # ── Probe ─────────────────────────────────────────────────────────────
 

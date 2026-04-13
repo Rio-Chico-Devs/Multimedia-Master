@@ -36,12 +36,13 @@ class ExtractTab(ctk.CTkFrame):
         if not self._ffmpeg_ok:
             ctk.CTkLabel(
                 self,
-                text="⚠  ffmpeg non trovato nel PATH.\n\n"
-                     "Per usare questa funzione installa ffmpeg:\n"
-                     "  • Windows:  winget install ffmpeg\n"
-                     "  • macOS:    brew install ffmpeg\n"
-                     "  • Linux:    sudo apt install ffmpeg\n\n"
-                     "Poi riavvia Multimedia Master.",
+                text="⚠  ffmpeg non trovato.\n\n"
+                     "Soluzione più semplice (nessuna installazione di sistema):\n\n"
+                     "    pip install imageio-ffmpeg\n\n"
+                     "Poi riavvia Multimedia Master.\n\n"
+                     "In alternativa puoi installare ffmpeg nel sistema:\n"
+                     "  • macOS:   brew install ffmpeg\n"
+                     "  • Linux:   sudo apt install ffmpeg",
                 font=ctk.CTkFont(size=12),
                 text_color="#f44336",
                 justify="left",
