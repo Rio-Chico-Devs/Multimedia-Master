@@ -55,7 +55,9 @@ class AudioEngine:
             try:
                 from pydub import AudioSegment
                 AudioSegment.converter = self._ffmpeg
-                AudioSegment.ffprobe   = self._ffmpeg.replace("ffmpeg", "ffprobe")
+                # ffprobe: imageio-ffmpeg ships only ffmpeg, not ffprobe.
+                # pydub can fall back to ffmpeg -i for metadata, so leave
+                # ffprobe unset rather than pointing to a non-existent path.
             except ImportError:
                 pass
 
@@ -97,14 +99,39 @@ class AudioEngine:
         except Exception:
             pass
 
-        # pydub fallback — handles mp3/aac/ogg etc. via ffmpeg
-        if duration_s == 0.0:
+        # ffmpeg fallback — handles mp3/aac/ogg etc. without needing ffprobe
+        if duration_s == 0.0 and self._ffmpeg:
             try:
-                from pydub import AudioSegment
-                audio       = AudioSegment.from_file(str(path))
-                duration_s  = len(audio) / 1000.0
-                sample_rate = audio.frame_rate
-                channels    = audio.channels
+                result = subprocess.run(
+                    [self._ffmpeg, "-i", str(path)],
+                    stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                    encoding="utf-8", errors="replace",
+                )
+                for line in result.stderr.splitlines():
+                    if "Duration:" in line and duration_s == 0.0:
+                        try:
+                            t = line.split("Duration:")[1].split(",")[0].strip()
+                            h, m, s = t.split(":")
+                            duration_s = int(h) * 3600 + int(m) * 60 + float(s)
+                        except Exception:
+                            pass
+                    if "Stream" in line and "Audio:" in line:
+                        try:
+                            parts = line.split("Audio:")[1].split(",")
+                            if not sample_rate:
+                                for p in parts:
+                                    p = p.strip()
+                                    if "Hz" in p:
+                                        sample_rate = int(p.split()[0])
+                                        break
+                            if not channels:
+                                for p in parts:
+                                    if "stereo" in p.lower():
+                                        channels = 2
+                                    elif "mono" in p.lower():
+                                        channels = 1
+                        except Exception:
+                            pass
             except Exception:
                 pass
 
@@ -146,22 +173,32 @@ class AudioEngine:
         sample_rate: int | None = None,   # Hz
         channels:    int | None = None,
     ) -> AudioResult:
-        """Convert/compress audio to the target format and settings."""
+        """Convert/compress audio to the target format using ffmpeg directly."""
+        if not self._ffmpeg:
+            return AudioResult(output=output, success=False,
+                               error="ffmpeg non trovato. Esegui: pip install imageio-ffmpeg")
         try:
-            from pydub import AudioSegment
-            audio = AudioSegment.from_file(str(src))
-
+            cmd = [self._ffmpeg, "-y", "-i", str(src)]
             if sample_rate:
-                audio = audio.set_frame_rate(sample_rate)
+                cmd += ["-ar", str(sample_rate)]
             if channels:
-                audio = audio.set_channels(channels)
-
-            kw: dict = {"format": fmt}
+                cmd += ["-ac", str(channels)]
             if bitrate and fmt not in ("wav", "flac", "aiff"):
-                kw["bitrate"] = f"{bitrate}k"
+                cmd += ["-b:a", f"{bitrate}k"]
+            cmd.append(str(output))
 
-            audio.export(str(output), **kw)
-            return self._ok(output, len(audio) / 1000.0)
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                # Return last 300 chars of stderr for a useful error message
+                err = proc.stderr.strip()[-300:] if proc.stderr else "Errore sconosciuto"
+                return AudioResult(output=output, success=False, error=err)
+            return self._ok(output)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
 
@@ -192,7 +229,8 @@ class AudioEngine:
                 cmd,
                 stderr=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
-                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace",
             )
             duration_s = 0.0
             for line in (proc.stderr or []):
@@ -439,7 +477,8 @@ class AudioEngine:
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                universal_newlines=True,
+                encoding="utf-8",
+                errors="replace",
             )
             for line in (proc.stdout or []):
                 line = line.strip()

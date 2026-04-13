@@ -59,7 +59,6 @@ class ConvertTab(ctk.CTkFrame):
 
         self._list_sf = ctk.CTkScrollableFrame(left, fg_color="transparent")
         self._list_sf.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
-        self._list_sf.grid_columnconfigure(0, weight=1)
 
         self._empty_lbl = ctk.CTkLabel(
             self._list_sf,
@@ -194,9 +193,8 @@ class ConvertTab(ctk.CTkFrame):
         self._refresh_empty()
 
     def _add_row(self, path: Path) -> None:
-        idx = len(self._file_rows)
         row = ctk.CTkFrame(self._list_sf, fg_color="#222", corner_radius=6)
-        row.grid(row=idx, column=0, sticky="ew", pady=2)
+        row.pack(fill="x", pady=2)
         row.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(row, text=path.name, anchor="w",
                      font=ctk.CTkFont(size=11)).grid(
@@ -282,9 +280,11 @@ class ConvertTab(ctk.CTkFrame):
         ).start()
 
     def _worker(self, fmt: str, bitrate, sr, ch) -> None:
-        ext   = AUDIO_FORMATS[fmt].ext
-        total = len(self._file_rows)
-        ok    = 0
+        import sys
+        ext    = AUDIO_FORMATS[fmt].ext
+        total  = len(self._file_rows)
+        ok     = 0
+        errors: list[str] = []
 
         for i, (path, _, lbl) in enumerate(self._file_rows):
             out_dir = self._out_dir or path.parent
@@ -296,15 +296,21 @@ class ConvertTab(ctk.CTkFrame):
                 self.after(0, lbl.configure,
                            {"text": "✓", "text_color": "#4caf50"})
             else:
+                err_msg = result.error or "Errore sconosciuto"
+                errors.append(f"{path.name}: {err_msg}")
+                print(f"[ERRORE] {path.name}\n{err_msg}\n", file=sys.stderr)
                 self.after(0, lbl.configure,
-                           {"text": "✗", "text_color": "#f44336"})
+                           {"text": "✗", "text_color": "#f44336",
+                            "tooltip_text": err_msg})
             self.after(0, self._progress.set, (i + 1) / total)
             self.after(0, self._status.busy,
                        f"In corso ({i+1}/{total})…")
 
-        msg = f"{ok}/{total} convertiti"
-        if ok < total:
-            self.after(0, self._status.err, msg + f" · {total-ok} errori")
+        if ok == total:
+            self.after(0, self._status.ok, f"{ok}/{total} convertiti")
         else:
-            self.after(0, self._status.ok, msg)
+            # Show first error detail in status bar
+            first_err = errors[0] if errors else ""
+            self.after(0, self._status.err,
+                       f"{ok}/{total} convertiti · {total-ok} errori — {first_err}")
         self.after(0, self._btn_run.configure, {"state": "normal"})
