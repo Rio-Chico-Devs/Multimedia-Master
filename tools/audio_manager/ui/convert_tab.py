@@ -280,9 +280,11 @@ class ConvertTab(ctk.CTkFrame):
         ).start()
 
     def _worker(self, fmt: str, bitrate, sr, ch) -> None:
-        ext   = AUDIO_FORMATS[fmt].ext
-        total = len(self._file_rows)
-        ok    = 0
+        import sys
+        ext    = AUDIO_FORMATS[fmt].ext
+        total  = len(self._file_rows)
+        ok     = 0
+        errors: list[str] = []
 
         for i, (path, _, lbl) in enumerate(self._file_rows):
             out_dir = self._out_dir or path.parent
@@ -294,15 +296,21 @@ class ConvertTab(ctk.CTkFrame):
                 self.after(0, lbl.configure,
                            {"text": "✓", "text_color": "#4caf50"})
             else:
+                err_msg = result.error or "Errore sconosciuto"
+                errors.append(f"{path.name}: {err_msg}")
+                print(f"[ERRORE] {path.name}\n{err_msg}\n", file=sys.stderr)
                 self.after(0, lbl.configure,
-                           {"text": "✗", "text_color": "#f44336"})
+                           {"text": "✗", "text_color": "#f44336",
+                            "tooltip_text": err_msg})
             self.after(0, self._progress.set, (i + 1) / total)
             self.after(0, self._status.busy,
                        f"In corso ({i+1}/{total})…")
 
-        msg = f"{ok}/{total} convertiti"
-        if ok < total:
-            self.after(0, self._status.err, msg + f" · {total-ok} errori")
+        if ok == total:
+            self.after(0, self._status.ok, f"{ok}/{total} convertiti")
         else:
-            self.after(0, self._status.ok, msg)
+            # Show first error detail in status bar
+            first_err = errors[0] if errors else ""
+            self.after(0, self._status.err,
+                       f"{ok}/{total} convertiti · {total-ok} errori — {first_err}")
         self.after(0, self._btn_run.configure, {"state": "normal"})
