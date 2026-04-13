@@ -59,7 +59,6 @@ class ConvertTab(ctk.CTkFrame):
 
         self._list_sf = ctk.CTkScrollableFrame(left, fg_color="transparent")
         self._list_sf.grid(row=1, column=0, sticky="nsew", padx=4, pady=4)
-        self._list_sf.grid_columnconfigure(0, weight=1)
 
         self._empty_lbl = ctk.CTkLabel(
             self._list_sf,
@@ -194,9 +193,8 @@ class ConvertTab(ctk.CTkFrame):
         self._refresh_empty()
 
     def _add_row(self, path: Path) -> None:
-        idx = len(self._file_rows)
         row = ctk.CTkFrame(self._list_sf, fg_color="#222", corner_radius=6)
-        row.grid(row=idx, column=0, sticky="ew", pady=2)
+        row.pack(fill="x", pady=2)
         row.grid_columnconfigure(0, weight=1)
         ctk.CTkLabel(row, text=path.name, anchor="w",
                      font=ctk.CTkFont(size=11)).grid(
