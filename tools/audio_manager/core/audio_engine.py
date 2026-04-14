@@ -16,9 +16,106 @@ import io
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
+
+# ── ID3 frame → (display_name, category) ─────────────────────────────────────
+# category: standard | technical | history | hidden | custom | art | info
+_ID3_INFO: dict[str, tuple[str, str]] = {
+    "TIT2": ("Titolo",                        "standard"),
+    "TIT1": ("Raggruppamento",                "standard"),
+    "TIT3": ("Sottotitolo / Versione",        "standard"),
+    "TPE1": ("Artista",                       "standard"),
+    "TPE2": ("Artista album",                 "standard"),
+    "TPE3": ("Direttore / Presentatore",      "standard"),
+    "TALB": ("Album",                         "standard"),
+    "TRCK": ("N° traccia",                    "standard"),
+    "TPOS": ("N° disco",                      "standard"),
+    "TCON": ("Genere",                        "standard"),
+    "TDRC": ("Data registrazione",            "standard"),
+    "TDRL": ("Data rilascio",                 "standard"),
+    "COMM": ("Commento",                      "standard"),
+    "USLT": ("Lyrics",                        "standard"),
+    "TCOM": ("Compositore",                   "standard"),
+    "TEXT": ("Autore testo",                  "standard"),
+    "TPUB": ("Publisher / Etichetta",         "standard"),
+    "TCOP": ("Copyright",                     "standard"),
+    "TLAN": ("Lingua",                        "standard"),
+    "TBPM": ("BPM",                           "standard"),
+    "TKEY": ("Tonalità",                      "standard"),
+    "TSRC": ("ISRC",                          "standard"),
+    "TMOO": ("Mood / Atmosfera",              "standard"),
+    "TPRO": ("Prodotto (℗)",                  "standard"),
+    "TRSN": ("Stazione radio",                "standard"),
+    # Technical
+    "TENC": ("Codificato da (software)",      "technical"),
+    "TSSE": ("Impostazioni encoder",          "technical"),
+    "TFLT": ("Tipo file audio",               "technical"),
+    "TMED": ("Supporto originale",            "technical"),
+    "TLEN": ("Durata dichiarata (ms)",        "technical"),
+    "WOAS": ("URL sorgente audio",            "technical"),
+    "WCOM": ("URL info commerciali",          "technical"),
+    "WCOP": ("URL copyright",                 "technical"),
+    # History / Provenance
+    "TDTG": ("⏱ Data scrittura tag",          "history"),
+    "TOFN": ("Nome file originale",           "history"),
+    "TOAL": ("Album originale",               "history"),
+    "TOPE": ("Artista originale",             "history"),
+    "TDOR": ("Data pubblicazione originale",  "history"),
+    "TOWN": ("Proprietario / Licenziatario",  "history"),
+    "TPE4": ("Remixato / modificato da",      "history"),
+    # Custom
+    "TXXX": ("Tag personalizzato",            "custom"),
+    "WXXX": ("URL personalizzato",            "custom"),
+    # Art
+    "APIC": ("Copertina album",               "art"),
+    # Hidden / Private
+    "PRIV": ("Dati privati",                  "hidden"),
+    "UFID": ("ID univoco file",               "hidden"),
+    "GEOB": ("Oggetto incapsulato",           "hidden"),
+    "COMR": ("Frame commerciale",             "hidden"),
+    "ENCR": ("Metodo cifratura",              "hidden"),
+    "AENC": ("Cifratura audio",               "hidden"),
+    "RVA2": ("Aggiust. volume",               "hidden"),
+    "RVRB": ("Riverbero",                     "hidden"),
+    "SIGN": ("Firma gruppo",                  "hidden"),
+    "OWNE": ("Frame proprietà",               "hidden"),
+    "USER": ("Termini d'uso",                 "hidden"),
+    "SYLT": ("Testo sincronizzato",           "hidden"),
+    "ETCO": ("Codici evento",                 "hidden"),
+    "POSS": ("Sincronizz. posizione",         "hidden"),
+}
+
+_MP4_INFO: dict[str, tuple[str, str]] = {
+    "©nam": ("Titolo",                        "standard"),
+    "©ART": ("Artista",                       "standard"),
+    "©alb": ("Album",                         "standard"),
+    "aART": ("Artista album",                 "standard"),
+    "©day": ("Anno",                          "standard"),
+    "trkn": ("N° traccia",                    "standard"),
+    "disk": ("N° disco",                      "standard"),
+    "©gen": ("Genere",                        "standard"),
+    "©cmt": ("Commento",                      "standard"),
+    "©wrt": ("Compositore",                   "standard"),
+    "©lyr": ("Lyrics",                        "standard"),
+    "cprt": ("Copyright",                     "standard"),
+    "©too": ("⏱ Encoder / Tool creazione",    "history"),
+    "soal": ("Ordinamento album",             "technical"),
+    "soar": ("Ordinamento artista",           "technical"),
+    "sonm": ("Ordinamento titolo",            "technical"),
+    "tvsh": ("Show TV",                       "technical"),
+    "tves": ("Episodio TV",                   "technical"),
+    "covr": ("Copertina album",               "art"),
+    "pgap": ("Gapless playback",              "technical"),
+}
+
+_VORBIS_STANDARD = {
+    "title", "artist", "album", "date", "tracknumber", "genre",
+    "comment", "albumartist", "composer", "lyrics", "description",
+    "discnumber", "isrc", "copyright", "language", "bpm",
+}
 
 
 # ── Result types ──────────────────────────────────────────────────────────────
@@ -593,6 +690,365 @@ class AudioEngine:
             tags["metadata_block_picture"] = [
                 base64.b64encode(pic.write()).decode("ascii")]
             tags.save()
+
+    def deep_read_tags(self, path: Path) -> list[dict]:
+        """
+        Read ALL metadata down to frame/atom level.
+        Returns a list of field dicts:
+          raw_key, display_name, value, category, editable, deletable, warning
+        Categories: standard | technical | history | hidden | custom | art | info
+        """
+        ext = path.suffix.lower()
+        fields: list[dict] = []
+        try:
+            if ext == ".mp3":
+                fields = self._deep_id3(path)
+            elif ext == ".flac":
+                fields = self._deep_flac(path)
+            elif ext in (".ogg", ".opus"):
+                fields = self._deep_ogg(path)
+            elif ext in (".m4a", ".mp4", ".aac"):
+                fields = self._deep_mp4(path)
+            else:
+                import mutagen
+                mf = mutagen.File(str(path), easy=False)
+                if mf and mf.tags:
+                    for k, v in mf.tags.items():
+                        fields.append(self._field(k, k, str(v), "custom"))
+
+            # File-level technical info (read-only)
+            try:
+                import mutagen
+                mf = mutagen.File(str(path))
+                if mf:
+                    info = mf.info
+                    for attr, label in [
+                        ("length",          "Durata (s)"),
+                        ("bitrate",         "Bitrate (bps)"),
+                        ("sample_rate",     "Sample rate (Hz)"),
+                        ("channels",        "Canali"),
+                        ("bits_per_sample", "Bit per campione"),
+                        ("encoder_info",    "⏱ Info encoder (stream)"),
+                        ("encoder_settings","⏱ Impostazioni encoder (stream)"),
+                        ("codec",           "Codec"),
+                    ]:
+                        val = getattr(info, attr, None)
+                        if val is not None and str(val).strip():
+                            w = ("Rilevabile nel flusso audio — non rimovibile senza ri-codifica"
+                                 if "encoder" in attr else "")
+                            fields.append(self._field(
+                                f"_info_{attr}", label, str(val),
+                                "history" if "encoder" in attr else "info",
+                                editable=False, deletable=False, warning=w))
+            except Exception:
+                pass
+        except Exception as e:
+            fields.append(self._field("_err", "Errore lettura", str(e),
+                                      "info", editable=False, deletable=False))
+        return fields
+
+    def _field(self, raw_key: str, display_name: str, value: str,
+               category: str, editable: bool = True,
+               deletable: bool = True, warning: str = "") -> dict:
+        if not warning:
+            if category == "history":
+                warning = "Rivela la storia / provenienza del file"
+            elif category == "hidden":
+                warning = "Dato non standard — possibile traccia identificativa"
+        return {
+            "raw_key": raw_key, "display_name": display_name,
+            "value": value, "category": category,
+            "editable": editable, "deletable": deletable, "warning": warning,
+        }
+
+    def _deep_id3(self, path: Path) -> list[dict]:
+        from mutagen.id3 import ID3, ID3NoHeaderError
+        fields = []
+        try:
+            try:
+                tags = ID3(str(path))
+            except ID3NoHeaderError:
+                return []
+            ver = f"ID3 v2.{tags.version[1]}.{tags.version[2]}"
+            fields.append(self._field("_id3ver", "Versione ID3", ver,
+                                      "info", editable=False, deletable=False))
+            for key in sorted(tags.keys()):
+                frame = tags[key]
+                base  = key[:4]
+                dname, cat = _ID3_INFO.get(base, (f"Frame {base}", "custom"))
+                # TXXX includes description
+                if base == "TXXX" and hasattr(frame, "desc") and frame.desc:
+                    dname = f"Tag personalizzato: {frame.desc}"
+                # Value extraction
+                if base == "APIC":
+                    data = getattr(frame, "data", b"")
+                    val  = (f"[{getattr(frame,'mime','?')}  "
+                            f"{len(data)//1024} KB]")
+                    edit, dele = False, True
+                elif base in ("PRIV", "GEOB", "ENCR", "AENC"):
+                    data = getattr(frame, "data", b"")
+                    val  = f"[binario {len(data)} B]  {data[:16].hex()}"
+                    edit, dele = False, True
+                elif hasattr(frame, "text") and frame.text:
+                    val  = str(frame.text[0])
+                    edit, dele = True, True
+                else:
+                    val  = str(frame)
+                    edit, dele = False, True
+                warn = ("Rilevabile nel flusso audio" if base == "TSSE"
+                        else "")
+                fields.append(self._field(key, dname, val, cat,
+                                          editable=edit, deletable=dele,
+                                          warning=warn))
+        except Exception:
+            pass
+        return fields
+
+    def _deep_flac(self, path: Path) -> list[dict]:
+        from mutagen.flac import FLAC
+        fields = []
+        try:
+            audio = FLAC(str(path))
+            # Vendor string — history
+            if audio.tags and hasattr(audio.tags, "vendor"):
+                v = audio.tags.vendor or ""
+                fields.append(self._field(
+                    "_vendor", "⏱ Vendor string (encoder)",
+                    v, "history", editable=False, deletable=False,
+                    warning="Rilevabile nel contenitore FLAC — non rimovibile senza ri-codifica"))
+            if audio.tags:
+                for key, values in audio.tags.as_dict().items():
+                    val = "; ".join(str(v) for v in values)
+                    cat = "standard" if key.lower() in _VORBIS_STANDARD else "custom"
+                    fields.append(self._field(key, key.capitalize(), val, cat))
+            if audio.pictures:
+                for pic in audio.pictures:
+                    fields.append(self._field(
+                        "_flac_pic", "Copertina album",
+                        f"[{pic.mime}  {len(pic.data)//1024} KB]",
+                        "art", editable=False))
+        except Exception:
+            pass
+        return fields
+
+    def _deep_ogg(self, path: Path) -> list[dict]:
+        fields = []
+        try:
+            ext = path.suffix.lower()
+            if ext == ".opus":
+                from mutagen.oggopus import OggOpus as Cls
+            else:
+                from mutagen.oggvorbis import OggVorbis as Cls
+            audio = Cls(str(path))
+            if audio.tags and hasattr(audio.tags, "vendor"):
+                v = audio.tags.vendor or ""
+                fields.append(self._field(
+                    "_vendor", "⏱ Vendor string (encoder)",
+                    v, "history", editable=False, deletable=False,
+                    warning="Rilevabile nel flusso — non rimovibile senza ri-codifica"))
+            if audio.tags:
+                for key, values in audio.tags.as_dict().items():
+                    val = "; ".join(str(v) for v in values)
+                    cat = "standard" if key.lower() in _VORBIS_STANDARD else "custom"
+                    fields.append(self._field(key, key.capitalize(), val, cat))
+        except Exception:
+            pass
+        return fields
+
+    def _deep_mp4(self, path: Path) -> list[dict]:
+        fields = []
+        try:
+            from mutagen.mp4 import MP4
+            audio = MP4(str(path))
+            if audio.tags:
+                for key, value in audio.tags.items():
+                    dname, cat = _MP4_INFO.get(
+                        key[:4] if key.startswith("----") else key,
+                        (f"Atom {key}", "hidden" if key.startswith("----") else "custom"))
+                    if key.startswith("----"):
+                        # custom iTunes atoms — often contain hidden data
+                        raw = value[0] if value else b""
+                        val = (raw.decode("utf-8", errors="replace")
+                               if isinstance(raw, bytes) else str(raw))
+                        warn = "Atom proprietario Apple/iTunes — possibile dato identificativo"
+                        fields.append(self._field(key, f"Atom: {key}", val,
+                                                   "hidden", editable=False,
+                                                   warning=warn))
+                        continue
+                    if key == "covr":
+                        val  = f"[immagine  {len(value[0])//1024 if value else 0} KB]"
+                        edit = False
+                    elif isinstance(value, list):
+                        val  = str(value[0]) if value else ""
+                        edit = True
+                    else:
+                        val  = str(value)
+                        edit = True
+                    fields.append(self._field(key, dname, val, cat, editable=edit))
+        except Exception:
+            pass
+        return fields
+
+    def save_meta_changes(
+        self,
+        path:      Path,
+        changes:   dict[str, str],   # raw_key → new value
+        deletions: set[str],         # raw_keys to remove
+    ) -> AudioResult:
+        """Write edited fields and remove deleted ones. Modifies file in place."""
+        try:
+            import mutagen
+            ext = path.suffix.lower()
+
+            if ext == ".mp3":
+                from mutagen.id3 import ID3, ID3NoHeaderError
+                try:
+                    tags = ID3(str(path))
+                except ID3NoHeaderError:
+                    tags = ID3()
+                # Deletions
+                for key in deletions:
+                    if not key.startswith("_") and key in tags:
+                        del tags[key]
+                # Changes — use easy interface for standard fields
+                mf_easy = mutagen.File(str(path), easy=True)
+                if mf_easy:
+                    _easy_map = {
+                        "TIT2": "title", "TPE1": "artist", "TALB": "album",
+                        "TDRC": "date",  "TRCK": "tracknumber", "TCON": "genre",
+                        "COMM": "comment",
+                    }
+                    for raw_key, val in changes.items():
+                        if raw_key.startswith("_"):
+                            continue
+                        easy_key = _easy_map.get(raw_key[:4])
+                        if easy_key and mf_easy:
+                            if val:
+                                mf_easy[easy_key] = [val]
+                            elif easy_key in mf_easy:
+                                del mf_easy[easy_key]
+                    mf_easy.save()
+                else:
+                    tags.save(str(path))
+
+            elif ext == ".flac":
+                from mutagen.flac import FLAC
+                audio = FLAC(str(path))
+                if audio.tags is None:
+                    audio.add_tags()
+                for key in deletions:
+                    if not key.startswith("_") and key in audio.tags:
+                        del audio.tags[key]
+                for key, val in changes.items():
+                    if key.startswith("_"):
+                        continue
+                    if val:
+                        audio.tags[key] = [val]
+                    elif key in audio.tags:
+                        del audio.tags[key]
+                audio.save()
+
+            elif ext in (".ogg", ".opus"):
+                if ext == ".opus":
+                    from mutagen.oggopus import OggOpus as Cls
+                else:
+                    from mutagen.oggvorbis import OggVorbis as Cls
+                audio = Cls(str(path))
+                if audio.tags is None:
+                    audio.add_tags()
+                for key in deletions:
+                    if not key.startswith("_") and key in audio.tags:
+                        del audio.tags[key]
+                for key, val in changes.items():
+                    if key.startswith("_"):
+                        continue
+                    if val:
+                        audio.tags[key] = [val]
+                    elif key in audio.tags:
+                        del audio.tags[key]
+                audio.save()
+
+            elif ext in (".m4a", ".mp4"):
+                from mutagen.mp4 import MP4
+                audio = MP4(str(path))
+                if audio.tags is None:
+                    audio.add_tags()
+                for key in deletions:
+                    if not key.startswith("_") and key in audio.tags:
+                        del audio.tags[key]
+                for key, val in changes.items():
+                    if key.startswith("_") or key.startswith("----"):
+                        continue
+                    if val:
+                        audio.tags[key] = [val]
+                    elif key in audio.tags:
+                        del audio.tags[key]
+                audio.save()
+
+            else:
+                mf = mutagen.File(str(path), easy=True)
+                if mf:
+                    for k in deletions:
+                        if not k.startswith("_") and k in mf:
+                            del mf[k]
+                    for k, v in changes.items():
+                        if k.startswith("_"):
+                            continue
+                        if v:
+                            mf[k] = [v]
+                        elif k in mf:
+                            del mf[k]
+                    mf.save()
+
+            return AudioResult(output=path, success=True)
+        except Exception as exc:
+            return AudioResult(output=path, success=False, error=str(exc))
+
+    def forensic_wipe(self, path: Path) -> AudioResult:
+        """
+        Remove ALL metadata traces (modifies file in place).
+        Step 1 — ffmpeg remux with -map_metadata -1 (strips container metadata)
+        Step 2 — mutagen clear any remaining tags
+        Note: encoder fingerprints embedded IN the audio stream (LAME header,
+        FLAC STREAMINFO encoder field, OGG vendor string) cannot be removed
+        without re-encoding, which would degrade quality in lossy formats.
+        """
+        tmp = Path(tempfile.mktemp(suffix=path.suffix))
+        try:
+            if self._ffmpeg:
+                res = subprocess.run(
+                    [self._ffmpeg, "-y", "-i", str(path),
+                     "-map_metadata", "-1",
+                     "-map_chapters", "-1",
+                     "-c:a", "copy",
+                     str(tmp)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    encoding="utf-8", errors="replace",
+                )
+                if res.returncode != 0:
+                    return AudioResult(
+                        output=path, success=False,
+                        error=f"ffmpeg: {(res.stderr or '').strip()[-200:]}")
+            else:
+                shutil.copy2(str(path), str(tmp))
+
+            # Second pass: mutagen strip
+            try:
+                import mutagen
+                mf = mutagen.File(str(tmp))
+                if mf and mf.tags:
+                    mf.tags.clear()
+                    mf.save()
+            except Exception:
+                pass
+
+            shutil.move(str(tmp), str(path))
+            return AudioResult(output=path, success=True)
+        except Exception as exc:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+            return AudioResult(output=path, success=False, error=str(exc))
 
     def strip_tags(self, path: Path) -> AudioResult:
         """Remove ALL metadata tags from the file (modifies in place)."""
