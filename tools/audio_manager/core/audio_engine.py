@@ -12,12 +12,15 @@ Long operations accept an optional progress_cb(float 0‥1) callback.
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import shutil
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -109,6 +112,28 @@ _MP4_INFO: dict[str, tuple[str, str]] = {
     "tves": ("Episodio TV",                   "technical"),
     "covr": ("Copertina album",               "art"),
     "pgap": ("Gapless playback",              "technical"),
+}
+
+# ID3v1 genre list (Winamp standard)
+_ID3V1_GENRES = [
+    "Blues","Classic Rock","Country","Dance","Disco","Funk","Grunge","Hip-Hop",
+    "Jazz","Metal","New Age","Oldies","Other","Pop","R&B","Rap","Reggae","Rock",
+    "Techno","Industrial","Alternative","Ska","Death Metal","Pranks","Soundtrack",
+    "Euro-Techno","Ambient","Trip-Hop","Vocal","Jazz+Funk","Fusion","Trance",
+    "Classical","Instrumental","Acid","House","Game","Sound Clip","Gospel","Noise",
+    "Alt. Rock","Bass","Soul","Punk","Space","Meditative","Instrumental Pop",
+    "Instrumental Rock","Ethnic","Gothic","Darkwave","Techno-Industrial","Electronic",
+    "Pop-Folk","Eurodance","Dream","Southern Rock","Comedy","Cult","Gangsta Rap",
+    "Top 40","Christian Rap","Pop/Funk","Jungle","Native American","Cabaret",
+    "New Wave","Psychedelic","Rave","Showtunes","Trailer","Lo-Fi","Tribal",
+    "Acid Punk","Acid Jazz","Polka","Retro","Musical","Rock & Roll","Hard Rock",
+]
+
+# MPEG side-info sizes: key=(mpeg_version_bits, channel_mode_bits)
+_MPEG_SIDE_INFO: dict[tuple[int,int], int] = {
+    (3,3):17, (3,2):32, (3,1):32, (3,0):32,  # MPEG1
+    (2,3): 9, (2,2):17, (2,1):17, (2,0):17,  # MPEG2
+    (0,3): 9, (0,2):17, (0,1):17, (0,0):17,  # MPEG2.5
 }
 
 _VORBIS_STANDARD = {
@@ -742,6 +767,32 @@ class AudioEngine:
                                 editable=False, deletable=False, warning=w))
             except Exception:
                 pass
+
+            # Filesystem timestamps
+            try:
+                stat   = path.stat()
+                fs_cre = datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+                fs_mod = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                fs_acc = datetime.fromtimestamp(stat.st_atime).strftime("%Y-%m-%d %H:%M:%S")
+                for rk, lbl, val in [
+                    ("_fs_created",  "Data creazione file (filesystem)", fs_cre),
+                    ("_fs_modified", "Data ultima modifica (filesystem)", fs_mod),
+                    ("_fs_accessed", "Data ultimo accesso (filesystem)",  fs_acc),
+                ]:
+                    fields.append(self._field(rk, lbl, val, "info",
+                                              editable=False, deletable=False))
+            except Exception:
+                pass
+
+            # SHA-256 hash
+            try:
+                h = self.get_file_hash(path)
+                fields.append(self._field(
+                    "_sha256", "SHA-256 (integrità file)", h,
+                    "info", editable=False, deletable=False))
+            except Exception:
+                pass
+
         except Exception as e:
             fields.append(self._field("_err", "Errore lettura", str(e),
                                       "info", editable=False, deletable=False))
@@ -763,43 +814,56 @@ class AudioEngine:
 
     def _deep_id3(self, path: Path) -> list[dict]:
         from mutagen.id3 import ID3, ID3NoHeaderError
-        fields = []
+        fields: list[dict] = []
         try:
             try:
                 tags = ID3(str(path))
             except ID3NoHeaderError:
-                return []
-            ver = f"ID3 v2.{tags.version[1]}.{tags.version[2]}"
-            fields.append(self._field("_id3ver", "Versione ID3", ver,
-                                      "info", editable=False, deletable=False))
-            for key in sorted(tags.keys()):
-                frame = tags[key]
-                base  = key[:4]
-                dname, cat = _ID3_INFO.get(base, (f"Frame {base}", "custom"))
-                # TXXX includes description
-                if base == "TXXX" and hasattr(frame, "desc") and frame.desc:
-                    dname = f"Tag personalizzato: {frame.desc}"
-                # Value extraction
-                if base == "APIC":
-                    data = getattr(frame, "data", b"")
-                    val  = (f"[{getattr(frame,'mime','?')}  "
-                            f"{len(data)//1024} KB]")
-                    edit, dele = False, True
-                elif base in ("PRIV", "GEOB", "ENCR", "AENC"):
-                    data = getattr(frame, "data", b"")
-                    val  = f"[binario {len(data)} B]  {data[:16].hex()}"
-                    edit, dele = False, True
-                elif hasattr(frame, "text") and frame.text:
-                    val  = str(frame.text[0])
-                    edit, dele = True, True
-                else:
-                    val  = str(frame)
-                    edit, dele = False, True
-                warn = ("Rilevabile nel flusso audio" if base == "TSSE"
-                        else "")
-                fields.append(self._field(key, dname, val, cat,
-                                          editable=edit, deletable=dele,
-                                          warning=warn))
+                tags = None
+
+            if tags is not None:
+                ver = f"ID3 v2.{tags.version[1]}.{tags.version[2]}"
+                fields.append(self._field("_id3ver", "Versione ID3", ver,
+                                          "info", editable=False, deletable=False))
+                for key in sorted(tags.keys()):
+                    frame = tags[key]
+                    base  = key[:4]
+                    dname, cat = _ID3_INFO.get(base, (f"Frame {base}", "custom"))
+                    if base == "TXXX" and hasattr(frame, "desc") and frame.desc:
+                        dname = f"Tag personalizzato: {frame.desc}"
+                    if base == "APIC":
+                        raw  = getattr(frame, "data", b"")
+                        val  = (f"[{getattr(frame,'mime','?')}  {len(raw)//1024} KB]")
+                        edit, dele = False, True
+                    elif base in ("PRIV", "GEOB", "ENCR", "AENC"):
+                        raw  = getattr(frame, "data", b"")
+                        val  = f"[binario {len(raw)} B]  {raw[:16].hex()}"
+                        edit, dele = False, True
+                    elif hasattr(frame, "text") and frame.text:
+                        val  = str(frame.text[0])
+                        edit, dele = True, True
+                    else:
+                        val  = str(frame)
+                        edit, dele = False, True
+                    warn = "Rilevabile nel flusso audio" if base == "TSSE" else ""
+                    fields.append(self._field(key, dname, val, cat,
+                                              editable=edit, deletable=dele,
+                                              warning=warn))
+
+            # ID3v1 + LAME header (binary analysis)
+            try:
+                raw_data = path.read_bytes()
+                # ID3v2 size for LAME parser
+                id3v2_size = 0
+                if raw_data[:3] == b"ID3":
+                    id3v2_size = (10 + ((raw_data[6] & 0x7f) << 21
+                                        | (raw_data[7] & 0x7f) << 14
+                                        | (raw_data[8] & 0x7f) << 7
+                                        | (raw_data[9] & 0x7f)))
+                fields.extend(self._read_id3v1(raw_data))
+                fields.extend(self._parse_lame_header(raw_data, id3v2_size))
+            except Exception:
+                pass
         except Exception:
             pass
         return fields
@@ -888,6 +952,369 @@ class AudioEngine:
         except Exception:
             pass
         return fields
+
+    # ── ID3v1 (binary, last 128 bytes of MP3) ─────────────────────────────
+
+    def _read_id3v1(self, data: bytes) -> list[dict]:
+        """Detect and parse ID3v1 tag (128 bytes at EOF)."""
+        fields: list[dict] = []
+        if len(data) < 128 or data[-128:-125] != b"TAG":
+            return fields
+
+        def _s(b: bytes) -> str:
+            return b.rstrip(b"\x00").decode("latin-1", errors="replace").strip()
+
+        title   = _s(data[-125:-95])
+        artist  = _s(data[-95:-65])
+        album   = _s(data[-65:-35])
+        year    = _s(data[-35:-31])
+        comment = _s(data[-31:-3]) if data[-2] != 0 else _s(data[-31:-3])
+        track   = str(data[-1]) if data[-2] == 0 and data[-1] != 0 else ""
+        genre_i = data[-1] if data[-2] != 0 else 0
+        genre   = (_ID3V1_GENRES[genre_i]
+                   if genre_i < len(_ID3V1_GENRES) else str(genre_i))
+
+        fields.append(self._field(
+            "_id3v1_present",
+            "⚠ ID3v1 rilevato (coesiste con ID3v2)",
+            "Il file è stato processato da almeno due software di tagging diversi",
+            "history", editable=False, deletable=False,
+            warning="Presenza simultanea ID3v1+ID3v2 indica modifiche successive alla creazione"))
+
+        for raw_k, display, val in [
+            ("_id3v1_title",   "ID3v1 · Titolo",   title),
+            ("_id3v1_artist",  "ID3v1 · Artista",  artist),
+            ("_id3v1_album",   "ID3v1 · Album",    album),
+            ("_id3v1_year",    "ID3v1 · Anno",     year),
+            ("_id3v1_comment", "ID3v1 · Commento", comment),
+            ("_id3v1_track",   "ID3v1 · Traccia",  track),
+            ("_id3v1_genre",   "ID3v1 · Genere",   genre),
+        ]:
+            if val:
+                fields.append(self._field(raw_k, display, val, "history",
+                                          editable=False, deletable=True))
+        return fields
+
+    # ── LAME / Xing header (binary, inside first MPEG frame) ──────────────
+
+    def _parse_lame_header(self, data: bytes, id3v2_size: int) -> list[dict]:
+        """Parse Xing/Info VBR marker and LAME encoder tag from MP3 stream."""
+        fields: list[dict] = []
+        try:
+            offset = id3v2_size
+            # Find first MPEG sync word within first 64 KB
+            end = min(offset + 65536, len(data) - 4)
+            while offset < end:
+                if data[offset] == 0xff and (data[offset + 1] & 0xe0) == 0xe0:
+                    break
+                offset += 1
+            else:
+                return fields
+
+            hdr        = data[offset: offset + 4]
+            mpeg_ver   = (hdr[1] >> 3) & 3
+            chan_mode  = (hdr[3] >> 6) & 3
+            si_size    = _MPEG_SIDE_INFO.get((mpeg_ver, chan_mode), 17)
+
+            xing_off = offset + 4 + si_size
+            if xing_off + 4 > len(data):
+                return fields
+
+            marker = data[xing_off: xing_off + 4]
+            if marker not in (b"Xing", b"Info"):
+                return fields
+
+            vbr_type = "VBR (Xing)" if marker == b"Xing" else "CBR (Info)"
+            fields.append(self._field(
+                "_xing_type", "⏱ Tipo encoding nel flusso (Xing/Info)",
+                vbr_type, "history", editable=False, deletable=False,
+                warning="Rilevabile nel flusso audio — non rimovibile senza ri-codifica"))
+
+            # Parse frame/byte counts from Xing header flags
+            flags = int.from_bytes(data[xing_off + 4: xing_off + 8], "big")
+            pos   = xing_off + 8
+            if flags & 0x01:  # frame count
+                frames = int.from_bytes(data[pos: pos + 4], "big")
+                fields.append(self._field("_xing_frames", "Frame audio totali",
+                                          str(frames), "info",
+                                          editable=False, deletable=False))
+                pos += 4
+            if flags & 0x02:  # byte count
+                nbytes = int.from_bytes(data[pos: pos + 4], "big")
+                fields.append(self._field("_xing_bytes", "Byte audio totali",
+                                          str(nbytes), "info",
+                                          editable=False, deletable=False))
+
+            # Scan for LAME tag within first 512 bytes after Xing
+            search_area = data[xing_off: xing_off + 512]
+            lame_pos    = search_area.find(b"LAME")
+            if lame_pos != -1:
+                abs_pos  = xing_off + lame_pos
+                ver_raw  = data[abs_pos + 4: abs_pos + 13]
+                ver      = ver_raw.decode("latin-1", errors="replace").rstrip("\x00").strip()
+                fields.append(self._field(
+                    "_lame_ver", "⏱ Versione encoder LAME (stream)",
+                    f"LAME {ver}", "history", editable=False, deletable=False,
+                    warning="Impronta encoder nel flusso — non rimovibile senza ri-codifica"))
+        except Exception:
+            pass
+        return fields
+
+    # ── Album art (raw bytes → let UI render) ─────────────────────────────
+
+    def get_album_art(self, path: Path) -> bytes | None:
+        """Return raw album art bytes, or None if not found."""
+        try:
+            ext = path.suffix.lower()
+            if ext == ".mp3":
+                from mutagen.id3 import ID3
+                tags = ID3(str(path))
+                for key in tags.keys():
+                    if key.startswith("APIC"):
+                        return tags[key].data
+            elif ext == ".flac":
+                from mutagen.flac import FLAC
+                audio = FLAC(str(path))
+                if audio.pictures:
+                    return audio.pictures[0].data
+            elif ext in (".m4a", ".mp4"):
+                from mutagen.mp4 import MP4
+                audio = MP4(str(path))
+                if audio.tags and "covr" in audio.tags:
+                    return bytes(audio.tags["covr"][0])
+            elif ext in (".ogg", ".opus"):
+                import base64
+                from mutagen.flac import Picture
+                cls = (__import__("mutagen.oggopus", fromlist=["OggOpus"]).OggOpus
+                       if ext == ".opus"
+                       else __import__("mutagen.oggvorbis",
+                                       fromlist=["OggVorbis"]).OggVorbis)
+                audio = cls(str(path))
+                if audio.tags:
+                    raw_list = audio.tags.get("metadata_block_picture", [])
+                    if raw_list:
+                        pic = Picture(base64.b64decode(raw_list[0]))
+                        return pic.data
+        except Exception:
+            pass
+        return None
+
+    # ── File hash (SHA-256) ───────────────────────────────────────────────
+
+    @staticmethod
+    def get_file_hash(path: Path) -> str:
+        sha = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                sha.update(chunk)
+        return sha.hexdigest()
+
+    # ── Provenance analysis ───────────────────────────────────────────────
+
+    def compute_provenance(self, path: Path, fields: list[dict]) -> dict:
+        """
+        Analyse all available signals and return a provenance report:
+        {"verdict": str, "score": int 0-100, "signals": list[str],
+         "hash": str, "fs_created": str, "fs_modified": str}
+        score: 0 = probably original, 100 = heavily modified
+        """
+        signals: list[str] = []
+        score = 0
+
+        # ── Filesystem timestamps ─────────────────────────────────────────
+        try:
+            stat   = path.stat()
+            fs_mod = datetime.fromtimestamp(stat.st_mtime)
+            fs_cre = datetime.fromtimestamp(stat.st_ctime)
+            fs_created  = fs_cre.strftime("%Y-%m-%d %H:%M:%S")
+            fs_modified = fs_mod.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            fs_created = fs_modified = "N/D"
+
+        # ── Signal analysis ───────────────────────────────────────────────
+        def _val(raw_key: str) -> str | None:
+            for f in fields:
+                if f["raw_key"] == raw_key:
+                    return f["value"]
+            return None
+
+        # ID3v1 + ID3v2 coexistence → strong modification signal
+        if any(f["raw_key"] == "_id3v1_present" for f in fields):
+            score += 35
+            signals.append("ID3v1 + ID3v2 coesistono — il file è stato ritaggato "
+                            "dopo la creazione originale")
+
+        # TDTG: explicit tagging timestamp
+        tdtg = _val("TDTG")
+        if tdtg:
+            score += 20
+            signals.append(f"Tag scritti/modificati il: {tdtg}")
+
+        # TENC / encoding software
+        tenc = _val("TENC")
+        if tenc:
+            score += 10
+            signals.append(f"Software di tagging/encoding: {tenc}")
+
+        # TSSE: encoder settings (stored by some encoders)
+        tsse = _val("TSSE")
+        if tsse:
+            score += 5
+            signals.append(f"Impostazioni encoder: {tsse}")
+
+        # LAME version in stream
+        lame = _val("_lame_ver")
+        if lame:
+            signals.append(f"Encoder nel flusso audio: {lame}")
+
+        # Vendor string (FLAC/OGG)
+        vendor = _val("_vendor")
+        if vendor:
+            signals.append(f"Vendor string (tagging software): {vendor}")
+
+        # TOFN: original filename stored in tag
+        tofn = _val("TOFN")
+        if tofn:
+            score += 10
+            signals.append(f"Nome file originale conservato nei tag: {tofn}")
+
+        # iTunes custom atoms
+        apple_count = sum(1 for f in fields
+                          if f["raw_key"].startswith("----:"))
+        if apple_count:
+            score += 10
+            signals.append(f"{apple_count} atom iTunes personalizzato/i "
+                            "(tracce di iTunes/Music)")
+
+        # Hidden/private frames
+        hidden = [f for f in fields if f["category"] == "hidden"]
+        if hidden:
+            score += 10
+            signals.append(f"{len(hidden)} campo/i nascosto/i "
+                            "(PRIV, UFID, GEOB, …)")
+
+        # Filesystem modification vs embedded recording year
+        for rk in ("TDRC", "©day", "date", "_id3v1_year"):
+            rec_year = _val(rk)
+            if rec_year and fs_modified != "N/D":
+                try:
+                    ry = int(str(rec_year)[:4])
+                    fy = datetime.strptime(fs_modified, "%Y-%m-%d %H:%M:%S").year
+                    if fy > ry + 1:
+                        score += 5
+                        signals.append(
+                            f"File modificato nel {fy}, "
+                            f"ma data registrazione nei tag: {ry}")
+                except Exception:
+                    pass
+                break
+
+        # TPE4: remixed/modified by
+        tpe4 = _val("TPE4")
+        if tpe4:
+            score += 5
+            signals.append(f"Remixato / modificato da: {tpe4}")
+
+        # ── Verdict ───────────────────────────────────────────────────────
+        if score == 0 and not signals:
+            verdict = ("🟢  Probabilmente originale — "
+                       "nessuna traccia di modifiche ai metadati")
+        elif score < 20:
+            verdict = "🟡  Poche tracce — ritaggato in modo pulito"
+        elif score < 50:
+            verdict = "🟠  Modificato — presenti tracce di lavorazione"
+        else:
+            verdict = ("🔴  Pesantemente modificato — "
+                       "molteplici strumenti hanno toccato il file")
+
+        # File hash
+        try:
+            file_hash = self.get_file_hash(path)
+        except Exception:
+            file_hash = "N/D"
+
+        return {
+            "verdict":     verdict,
+            "score":       min(score, 100),
+            "signals":     signals,
+            "hash":        file_hash,
+            "fs_created":  fs_created,
+            "fs_modified": fs_modified,
+        }
+
+    # ── Export metadata report ────────────────────────────────────────────
+
+    def export_report(
+        self,
+        path:        Path,
+        fields:      list[dict],
+        provenance:  dict,
+        output_path: Path,
+    ) -> AudioResult:
+        """Export full metadata report as TXT or JSON."""
+        try:
+            if output_path.suffix.lower() == ".json":
+                data = {
+                    "file":       str(path),
+                    "analyzed":   datetime.now().isoformat(),
+                    "provenance": provenance,
+                    "fields": [
+                        {"key": f["raw_key"], "name": f["display_name"],
+                         "value": f["value"], "category": f["category"]}
+                        for f in fields
+                    ],
+                }
+                output_path.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False),
+                    encoding="utf-8")
+            else:
+                _CAT_LABELS_LOCAL = {
+                    "standard":  "TAG STANDARD",
+                    "technical": "TECNICI",
+                    "history":   "STORICO / PROVENIENZA",
+                    "hidden":    "DATI NASCOSTI / PRIVATI",
+                    "custom":    "TAG PERSONALIZZATI",
+                    "art":       "IMMAGINI INCORPORATE",
+                    "info":      "INFORMAZIONI FILE",
+                }
+                lines = [
+                    "═" * 60,
+                    "  Multimedia Master — Report Metadati",
+                    "═" * 60,
+                    f"  File:       {path.name}",
+                    f"  Percorso:   {path}",
+                    f"  Analizzato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"  SHA-256:    {provenance['hash']}",
+                    f"  Creato:     {provenance['fs_created']}",
+                    f"  Modificato: {provenance['fs_modified']}",
+                    "",
+                    "── PROVENIENZA " + "─" * 44,
+                    f"  {provenance['verdict']}",
+                    f"  Score: {provenance['score']}/100",
+                ]
+                if provenance["signals"]:
+                    lines.append("")
+                    for s in provenance["signals"]:
+                        lines.append(f"  • {s}")
+                lines.append("")
+
+                current_cat = None
+                for f in fields:
+                    if f["category"] != current_cat:
+                        current_cat = f["category"]
+                        lbl = _CAT_LABELS_LOCAL.get(current_cat, current_cat.upper())
+                        lines.append(f"── {lbl} " + "─" * max(1, 55 - len(lbl)))
+                    val = f["value"]
+                    if len(val) > 80:
+                        val = val[:77] + "…"
+                    lines.append(f"  {f['display_name']:<38} {val}")
+                lines.append("")
+                lines.append("═" * 60)
+                output_path.write_text("\n".join(lines), encoding="utf-8")
+
+            return AudioResult(output=output_path, success=True)
+        except Exception as exc:
+            return AudioResult(output=output_path, success=False, error=str(exc))
 
     def save_meta_changes(
         self,
