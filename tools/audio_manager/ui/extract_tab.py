@@ -219,4 +219,4 @@ class ExtractTab(ctk.CTkFrame):
             self.after(0, self._progress.set, 1.0)
         else:
             self.after(0, self._status.err, result.error)
-        self.after(0, self._btn_run.configure, {"state": "normal"})
+        self.after(0, lambda: self._btn_run.configure(state="normal"))

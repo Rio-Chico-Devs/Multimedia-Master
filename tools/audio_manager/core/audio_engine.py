@@ -12,13 +12,135 @@ Long operations accept an optional progress_cb(float 0‥1) callback.
 """
 from __future__ import annotations
 
+import hashlib
 import io
+import json
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
+
+# ── ID3 frame → (display_name, category) ─────────────────────────────────────
+# category: standard | technical | history | hidden | custom | art | info
+_ID3_INFO: dict[str, tuple[str, str]] = {
+    "TIT2": ("Titolo",                        "standard"),
+    "TIT1": ("Raggruppamento",                "standard"),
+    "TIT3": ("Sottotitolo / Versione",        "standard"),
+    "TPE1": ("Artista",                       "standard"),
+    "TPE2": ("Artista album",                 "standard"),
+    "TPE3": ("Direttore / Presentatore",      "standard"),
+    "TALB": ("Album",                         "standard"),
+    "TRCK": ("N° traccia",                    "standard"),
+    "TPOS": ("N° disco",                      "standard"),
+    "TCON": ("Genere",                        "standard"),
+    "TDRC": ("Data registrazione",            "standard"),
+    "TDRL": ("Data rilascio",                 "standard"),
+    "COMM": ("Commento",                      "standard"),
+    "USLT": ("Lyrics",                        "standard"),
+    "TCOM": ("Compositore",                   "standard"),
+    "TEXT": ("Autore testo",                  "standard"),
+    "TPUB": ("Publisher / Etichetta",         "standard"),
+    "TCOP": ("Copyright",                     "standard"),
+    "TLAN": ("Lingua",                        "standard"),
+    "TBPM": ("BPM",                           "standard"),
+    "TKEY": ("Tonalità",                      "standard"),
+    "TSRC": ("ISRC",                          "standard"),
+    "TMOO": ("Mood / Atmosfera",              "standard"),
+    "TPRO": ("Prodotto (℗)",                  "standard"),
+    "TRSN": ("Stazione radio",                "standard"),
+    # Technical
+    "TENC": ("Codificato da (software)",      "technical"),
+    "TSSE": ("Impostazioni encoder",          "technical"),
+    "TFLT": ("Tipo file audio",               "technical"),
+    "TMED": ("Supporto originale",            "technical"),
+    "TLEN": ("Durata dichiarata (ms)",        "technical"),
+    "WOAS": ("URL sorgente audio",            "technical"),
+    "WCOM": ("URL info commerciali",          "technical"),
+    "WCOP": ("URL copyright",                 "technical"),
+    # History / Provenance
+    "TDTG": ("⏱ Data scrittura tag",          "history"),
+    "TOFN": ("Nome file originale",           "history"),
+    "TOAL": ("Album originale",               "history"),
+    "TOPE": ("Artista originale",             "history"),
+    "TDOR": ("Data pubblicazione originale",  "history"),
+    "TOWN": ("Proprietario / Licenziatario",  "history"),
+    "TPE4": ("Remixato / modificato da",      "history"),
+    # Custom
+    "TXXX": ("Tag personalizzato",            "custom"),
+    "WXXX": ("URL personalizzato",            "custom"),
+    # Art
+    "APIC": ("Copertina album",               "art"),
+    # Hidden / Private
+    "PRIV": ("Dati privati",                  "hidden"),
+    "UFID": ("ID univoco file",               "hidden"),
+    "GEOB": ("Oggetto incapsulato",           "hidden"),
+    "COMR": ("Frame commerciale",             "hidden"),
+    "ENCR": ("Metodo cifratura",              "hidden"),
+    "AENC": ("Cifratura audio",               "hidden"),
+    "RVA2": ("Aggiust. volume",               "hidden"),
+    "RVRB": ("Riverbero",                     "hidden"),
+    "SIGN": ("Firma gruppo",                  "hidden"),
+    "OWNE": ("Frame proprietà",               "hidden"),
+    "USER": ("Termini d'uso",                 "hidden"),
+    "SYLT": ("Testo sincronizzato",           "hidden"),
+    "ETCO": ("Codici evento",                 "hidden"),
+    "POSS": ("Sincronizz. posizione",         "hidden"),
+}
+
+_MP4_INFO: dict[str, tuple[str, str]] = {
+    "©nam": ("Titolo",                        "standard"),
+    "©ART": ("Artista",                       "standard"),
+    "©alb": ("Album",                         "standard"),
+    "aART": ("Artista album",                 "standard"),
+    "©day": ("Anno",                          "standard"),
+    "trkn": ("N° traccia",                    "standard"),
+    "disk": ("N° disco",                      "standard"),
+    "©gen": ("Genere",                        "standard"),
+    "©cmt": ("Commento",                      "standard"),
+    "©wrt": ("Compositore",                   "standard"),
+    "©lyr": ("Lyrics",                        "standard"),
+    "cprt": ("Copyright",                     "standard"),
+    "©too": ("⏱ Encoder / Tool creazione",    "history"),
+    "soal": ("Ordinamento album",             "technical"),
+    "soar": ("Ordinamento artista",           "technical"),
+    "sonm": ("Ordinamento titolo",            "technical"),
+    "tvsh": ("Show TV",                       "technical"),
+    "tves": ("Episodio TV",                   "technical"),
+    "covr": ("Copertina album",               "art"),
+    "pgap": ("Gapless playback",              "technical"),
+}
+
+# ID3v1 genre list (Winamp standard)
+_ID3V1_GENRES = [
+    "Blues","Classic Rock","Country","Dance","Disco","Funk","Grunge","Hip-Hop",
+    "Jazz","Metal","New Age","Oldies","Other","Pop","R&B","Rap","Reggae","Rock",
+    "Techno","Industrial","Alternative","Ska","Death Metal","Pranks","Soundtrack",
+    "Euro-Techno","Ambient","Trip-Hop","Vocal","Jazz+Funk","Fusion","Trance",
+    "Classical","Instrumental","Acid","House","Game","Sound Clip","Gospel","Noise",
+    "Alt. Rock","Bass","Soul","Punk","Space","Meditative","Instrumental Pop",
+    "Instrumental Rock","Ethnic","Gothic","Darkwave","Techno-Industrial","Electronic",
+    "Pop-Folk","Eurodance","Dream","Southern Rock","Comedy","Cult","Gangsta Rap",
+    "Top 40","Christian Rap","Pop/Funk","Jungle","Native American","Cabaret",
+    "New Wave","Psychedelic","Rave","Showtunes","Trailer","Lo-Fi","Tribal",
+    "Acid Punk","Acid Jazz","Polka","Retro","Musical","Rock & Roll","Hard Rock",
+]
+
+# MPEG side-info sizes: key=(mpeg_version_bits, channel_mode_bits)
+_MPEG_SIDE_INFO: dict[tuple[int,int], int] = {
+    (3,3):17, (3,2):32, (3,1):32, (3,0):32,  # MPEG1
+    (2,3): 9, (2,2):17, (2,1):17, (2,0):17,  # MPEG2
+    (0,3): 9, (0,2):17, (0,1):17, (0,0):17,  # MPEG2.5
+}
+
+_VORBIS_STANDARD = {
+    "title", "artist", "album", "date", "tracknumber", "genre",
+    "comment", "albumartist", "composer", "lyrics", "description",
+    "discnumber", "isrc", "copyright", "language", "bpm",
+}
 
 
 # ── Result types ──────────────────────────────────────────────────────────────
@@ -268,12 +390,29 @@ class AudioEngine:
         prop_decrease: float = 0.75,
         progress_cb:   Callable[[float], None] | None = None,
     ) -> AudioResult:
-        """Reduce noise and/or normalize loudness. Requires soundfile + numpy."""
+        """Reduce noise and/or normalize loudness. Requires soundfile + numpy.
+        For formats soundfile can't read (MP3/AAC), decodes to temp WAV first."""
+        _PCM_EXTS = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
+        tmp_in:  Path | None = None
+        tmp_out: Path | None = None
         try:
             import soundfile as sf
             import numpy as np
 
-            data, sr = sf.read(str(src), always_2d=True)  # (frames, ch)
+            need_decode = src.suffix.lower() not in _PCM_EXTS
+            if need_decode:
+                if not self._ffmpeg:
+                    return AudioResult(output=output, success=False,
+                                       error="ffmpeg necessario per elaborare MP3/AAC")
+                tmp_in = Path(tempfile.mktemp(suffix=".wav"))
+                r = self.convert(src, tmp_in, "wav")
+                if not r.success:
+                    return r
+                read_src = tmp_in
+            else:
+                read_src = src
+
+            data, sr = sf.read(str(read_src), always_2d=True)
             if progress_cb: progress_cb(0.15)
 
             if denoise:
@@ -286,23 +425,104 @@ class AudioEngine:
                         axis=1,
                     )
                 except ImportError:
-                    pass   # skip silently if not installed
+                    pass
             if progress_cb: progress_cb(0.75)
 
             if normalize:
                 peak = np.max(np.abs(data))
                 if peak > 1e-6:
-                    data = data / peak * 0.95   # -0.45 dBFS headroom
+                    data = data / peak * 0.95
 
             if progress_cb: progress_cb(0.90)
 
-            # Preserve original format where possible
-            fmt_map = {".flac": "flac", ".wav": "WAV", ".ogg": "ogg"}
-            out_fmt = fmt_map.get(output.suffix.lower(), "WAV")
-            sf.write(str(output), data, sr, format=out_fmt)
+            need_encode = output.suffix.lower() not in _PCM_EXTS
+            if need_encode:
+                tmp_out = Path(tempfile.mktemp(suffix=".wav"))
+                sf.write(str(tmp_out), data, sr, format="WAV")
+                result = self.convert(tmp_out, output, output.suffix.lstrip("."))
+                if progress_cb: progress_cb(1.0)
+                return result
+            else:
+                fmt_map = {".flac": "flac", ".wav": "WAV", ".ogg": "ogg"}
+                out_fmt = fmt_map.get(output.suffix.lower(), "WAV")
+                sf.write(str(output), data, sr, format=out_fmt)
+                if progress_cb: progress_cb(1.0)
+                return self._ok(output, len(data) / sr)
+        except Exception as exc:
+            return AudioResult(output=output, success=False, error=str(exc))
+        finally:
+            for t in (tmp_in, tmp_out):
+                if t:
+                    t.unlink(missing_ok=True)
 
-            if progress_cb: progress_cb(1.0)
-            return self._ok(output, len(data) / sr)
+    # ── Voice cleaner (WAV → web-optimised MP3) ────────────────────────────
+
+    def clean_voice(
+        self,
+        src:       Path,
+        output:    Path,
+        preset:    str = "normale",    # "leggero" | "normale" | "intenso"
+        mp3_q:     int = 2,            # libmp3lame VBR: 0(best) – 9(worst); 2 ≈ 190 kbps
+        to_mono:   bool = False,
+        sample_rate: int = 44100,
+    ) -> AudioResult:
+        """
+        Voice cleaner: removes rumble, reduces noise, normalises loudness to
+        broadcast standard (EBU R128), and encodes to a web-optimised MP3.
+
+        All filters are conservative to preserve the original voice character.
+        Pipeline is pure ffmpeg, so there's no Python audio-processing risk of
+        truncation, clipping or resampling artefacts.
+        """
+        if not self._ffmpeg:
+            return AudioResult(output=output, success=False,
+                               error="ffmpeg non trovato. pip install imageio-ffmpeg")
+
+        # Filter chain per preset
+        if preset == "leggero":
+            afilter = (
+                "highpass=f=60,"
+                "loudnorm=I=-16:TP=-1.5:LRA=11"
+            )
+        elif preset == "intenso":
+            afilter = (
+                "highpass=f=85,"
+                "afftdn=nr=20:nf=-20:tn=1,"
+                "equalizer=f=3000:t=o:w=2:g=1.8,"
+                "loudnorm=I=-16:TP=-1.5:LRA=11"
+            )
+        else:  # "normale" — balanced, safe default
+            afilter = (
+                "highpass=f=80,"
+                "afftdn=nr=12:nf=-25:tn=1,"
+                "loudnorm=I=-16:TP=-1.5:LRA=11"
+            )
+
+        try:
+            cmd = [
+                self._ffmpeg, "-y", "-i", str(src),
+                "-af", afilter,
+                "-ar", str(sample_rate),
+            ]
+            if to_mono:
+                cmd += ["-ac", "1"]
+            cmd += [
+                "-c:a", "libmp3lame",
+                "-q:a", str(mp3_q),
+                "-map_metadata", "-1",   # strip metadata for clean web file
+                str(output),
+            ]
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                err = proc.stderr.strip()[-400:] if proc.stderr else "Errore sconosciuto"
+                return AudioResult(output=output, success=False, error=err)
+            return self._ok(output)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
 
@@ -363,13 +583,34 @@ class AudioEngine:
         mid_db:    float = 0.0,   # gain for 250–4000 Hz
         treble_db: float = 0.0,   # gain for >4000 Hz
     ) -> AudioResult:
-        """Apply a 3-band shelving EQ using Butterworth filters. Requires scipy."""
+        """
+        Apply a 3-band shelving EQ using Butterworth filters. Requires scipy.
+        For formats soundfile can't read (MP3/AAC), decodes to a temp WAV first,
+        applies EQ, then re-encodes to the desired output format.
+        """
+        _PCM_EXTS = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
+        tmp_in:  Path | None = None
+        tmp_out: Path | None = None
         try:
             import soundfile as sf
             import numpy as np
             from scipy.signal import butter, sosfilt
 
-            data, sr = sf.read(str(src), always_2d=True)
+            # If source can't be read directly, decode to temp WAV
+            need_decode = src.suffix.lower() not in _PCM_EXTS
+            if need_decode:
+                if not self._ffmpeg:
+                    return AudioResult(output=output, success=False,
+                                       error="ffmpeg necessario per la EQ su MP3/AAC")
+                tmp_in = Path(tempfile.mktemp(suffix=".wav"))
+                r = self.convert(src, tmp_in, "wav")
+                if not r.success:
+                    return r
+                read_src = tmp_in
+            else:
+                read_src = src
+
+            data, sr = sf.read(str(read_src), always_2d=True)
 
             def _gain(db: float) -> float:
                 return 10 ** (db / 20.0)
@@ -384,20 +625,90 @@ class AudioEngine:
                     sos = butter(4, [lo / nyq, hi / nyq], btype="band", output="sos")
                 return sosfilt(sos, data, axis=0)
 
-            result = (
-                _filter(None,  250.0) * _gain(bass_db)
+            eq_data = (
+                _filter(None,   250.0) * _gain(bass_db)
                 + _filter(250.0, 4000.0) * _gain(mid_db)
-                + _filter(4000.0, None) * _gain(treble_db)
+                + _filter(4000.0, None)   * _gain(treble_db)
             )
 
             # Prevent clipping
-            peak = np.max(np.abs(result))
+            peak = np.max(np.abs(eq_data))
             if peak > 1.0:
-                result /= peak
+                eq_data /= peak
 
-            out_fmt = {".flac": "flac", ".wav": "WAV"}.get(output.suffix.lower(), "WAV")
-            sf.write(str(output), result, sr, format=out_fmt)
-            return self._ok(output, len(data) / float(sr))
+            # If output must be a non-PCM format, write WAV first then convert
+            need_encode = output.suffix.lower() not in _PCM_EXTS
+            if need_encode:
+                tmp_out = Path(tempfile.mktemp(suffix=".wav"))
+                sf.write(str(tmp_out), eq_data, sr, format="WAV")
+                return self.convert(tmp_out, output, output.suffix.lstrip("."))
+            else:
+                out_fmt = {".flac": "flac", ".wav": "WAV", ".ogg": "ogg"}.get(
+                    output.suffix.lower(), "WAV")
+                sf.write(str(output), eq_data, sr, format=out_fmt)
+                return self._ok(output, len(data) / float(sr))
+        except Exception as exc:
+            return AudioResult(output=output, success=False, error=str(exc))
+        finally:
+            for t in (tmp_in, tmp_out):
+                if t:
+                    t.unlink(missing_ok=True)
+
+    # ── Split ─────────────────────────────────────────────────────────────
+
+    def split(
+        self,
+        src:             Path,
+        output_dir:      Path,
+        split_points_ms: list[int],
+    ) -> list[AudioResult]:
+        """
+        Split audio at the given millisecond positions.
+        Produces N+1 files named <stem>_part01<ext>, _part02, …
+        Returns a list of AudioResult (one per output file).
+        """
+        try:
+            from pydub import AudioSegment
+            audio    = AudioSegment.from_file(str(src))
+            total_ms = len(audio)
+            fmt      = src.suffix.lstrip(".")
+
+            points = [0] + sorted(int(p) for p in split_points_ms) + [total_ms]
+            results: list[AudioResult] = []
+            for i, (a, b) in enumerate(zip(points, points[1:]), start=1):
+                clip = audio[a:b]
+                out  = output_dir / f"{src.stem}_part{i:02d}{src.suffix}"
+                clip.export(str(out), format=fmt)
+                results.append(self._ok(out, len(clip) / 1000.0))
+            return results
+        except Exception as exc:
+            return [AudioResult(output=None, success=False, error=str(exc))]
+
+    # ── Mute region ───────────────────────────────────────────────────────
+
+    def mute_region(
+        self,
+        src:      Path,
+        output:   Path,
+        start_ms: int,
+        end_ms:   int,
+    ) -> AudioResult:
+        """
+        Silence the audio between start_ms and end_ms (replace with silence).
+        The file length is preserved.
+        """
+        try:
+            from pydub import AudioSegment
+            audio    = AudioSegment.from_file(str(src))
+            end_ms   = min(end_ms, len(audio))
+            silence  = AudioSegment.silent(
+                duration=end_ms - start_ms,
+                frame_rate=audio.frame_rate,
+            ).set_channels(audio.channels).set_sample_width(audio.sample_width)
+            muted = audio[:start_ms] + silence + audio[end_ms:]
+            fmt   = output.suffix.lstrip(".")
+            muted.export(str(output), format=fmt)
+            return self._ok(output, len(muted) / 1000.0)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
 
@@ -434,23 +745,41 @@ class AudioEngine:
         """
         Return (pos_peaks, neg_peaks) normalised to [0, 1].
         Fast: reads full file once, splits into N chunks, takes max/min per chunk.
+        Falls back to ffmpeg-decoded WAV for formats soundfile can't read (MP3/AAC…).
         """
+        tmp: Path | None = None
         try:
             import soundfile as sf
             import numpy as np
 
-            data, _ = sf.read(str(path), always_2d=False)
+            try:
+                data, _ = sf.read(str(path), always_2d=False)
+            except Exception:
+                # soundfile can't read MP3/AAC — decode to a temp WAV via ffmpeg
+                if not self._ffmpeg:
+                    return [0.0] * num_samples, [0.0] * num_samples
+                tmp = Path(tempfile.mktemp(suffix=".wav"))
+                subprocess.run(
+                    [self._ffmpeg, "-y", "-i", str(path), str(tmp)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    encoding="utf-8", errors="replace",
+                )
+                data, _ = sf.read(str(tmp), always_2d=False)
+
             if data.ndim > 1:
                 data = data.mean(axis=1)   # mix to mono
 
             chunks = np.array_split(data, num_samples)
-            pos = [float(np.max(c))  if len(c) else 0.0 for c in chunks]
-            neg = [float(np.min(c))  if len(c) else 0.0 for c in chunks]
+            pos = [float(np.max(c)) if len(c) else 0.0 for c in chunks]
+            neg = [float(np.min(c)) if len(c) else 0.0 for c in chunks]
 
             peak = max(max(abs(v) for v in pos + neg), 1e-6)
             return [v / peak for v in pos], [v / peak for v in neg]
         except Exception:
             return [0.0] * num_samples, [0.0] * num_samples
+        finally:
+            if tmp:
+                tmp.unlink(missing_ok=True)
 
     # ── Stem separation (demucs) ──────────────────────────────────────────
 
@@ -593,6 +922,884 @@ class AudioEngine:
             tags["metadata_block_picture"] = [
                 base64.b64encode(pic.write()).decode("ascii")]
             tags.save()
+
+    def deep_read_tags(self, path: Path) -> list[dict]:
+        """
+        Read ALL metadata down to frame/atom level.
+        Returns a list of field dicts:
+          raw_key, display_name, value, category, editable, deletable, warning
+        Categories: standard | technical | history | hidden | custom | art | info
+        """
+        ext = path.suffix.lower()
+        fields: list[dict] = []
+        try:
+            if ext == ".mp3":
+                fields = self._deep_id3(path)
+            elif ext == ".flac":
+                fields = self._deep_flac(path)
+            elif ext in (".ogg", ".opus"):
+                fields = self._deep_ogg(path)
+            elif ext in (".m4a", ".mp4", ".aac"):
+                fields = self._deep_mp4(path)
+            else:
+                import mutagen
+                mf = mutagen.File(str(path), easy=False)
+                if mf and mf.tags:
+                    for k, v in mf.tags.items():
+                        fields.append(self._field(k, k, str(v), "custom"))
+
+            # File-level technical info (read-only)
+            try:
+                import mutagen
+                mf = mutagen.File(str(path))
+                if mf:
+                    info = mf.info
+                    for attr, label in [
+                        ("length",          "Durata (s)"),
+                        ("bitrate",         "Bitrate (bps)"),
+                        ("sample_rate",     "Sample rate (Hz)"),
+                        ("channels",        "Canali"),
+                        ("bits_per_sample", "Bit per campione"),
+                        ("encoder_info",    "⏱ Info encoder (stream)"),
+                        ("encoder_settings","⏱ Impostazioni encoder (stream)"),
+                        ("codec",           "Codec"),
+                    ]:
+                        val = getattr(info, attr, None)
+                        if val is not None and str(val).strip():
+                            w = ("Rilevabile nel flusso audio — non rimovibile senza ri-codifica"
+                                 if "encoder" in attr else "")
+                            fields.append(self._field(
+                                f"_info_{attr}", label, str(val),
+                                "history" if "encoder" in attr else "info",
+                                editable=False, deletable=False, warning=w))
+            except Exception:
+                pass
+
+            # Filesystem timestamps
+            try:
+                stat   = path.stat()
+                fs_cre = datetime.fromtimestamp(stat.st_ctime).strftime("%Y-%m-%d %H:%M:%S")
+                fs_mod = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                fs_acc = datetime.fromtimestamp(stat.st_atime).strftime("%Y-%m-%d %H:%M:%S")
+                for rk, lbl, val in [
+                    ("_fs_created",  "Data creazione file (filesystem)", fs_cre),
+                    ("_fs_modified", "Data ultima modifica (filesystem)", fs_mod),
+                    ("_fs_accessed", "Data ultimo accesso (filesystem)",  fs_acc),
+                ]:
+                    fields.append(self._field(rk, lbl, val, "info",
+                                              editable=False, deletable=False))
+            except Exception:
+                pass
+
+            # SHA-256 hash
+            try:
+                h = self.get_file_hash(path)
+                fields.append(self._field(
+                    "_sha256", "SHA-256 (integrità file)", h,
+                    "info", editable=False, deletable=False))
+            except Exception:
+                pass
+
+        except Exception as e:
+            fields.append(self._field("_err", "Errore lettura", str(e),
+                                      "info", editable=False, deletable=False))
+        return fields
+
+    def _field(self, raw_key: str, display_name: str, value: str,
+               category: str, editable: bool = True,
+               deletable: bool = True, warning: str = "") -> dict:
+        if not warning:
+            if category == "history":
+                warning = "Rivela la storia / provenienza del file"
+            elif category == "hidden":
+                warning = "Dato non standard — possibile traccia identificativa"
+        return {
+            "raw_key": raw_key, "display_name": display_name,
+            "value": value, "category": category,
+            "editable": editable, "deletable": deletable, "warning": warning,
+        }
+
+    def _deep_id3(self, path: Path) -> list[dict]:
+        from mutagen.id3 import ID3, ID3NoHeaderError
+        fields: list[dict] = []
+        try:
+            try:
+                tags = ID3(str(path))
+            except ID3NoHeaderError:
+                tags = None
+
+            if tags is not None:
+                ver = f"ID3 v2.{tags.version[1]}.{tags.version[2]}"
+                fields.append(self._field("_id3ver", "Versione ID3", ver,
+                                          "info", editable=False, deletable=False))
+                for key in sorted(tags.keys()):
+                    frame = tags[key]
+                    base  = key[:4]
+                    dname, cat = _ID3_INFO.get(base, (f"Frame {base}", "custom"))
+                    if base == "TXXX" and hasattr(frame, "desc") and frame.desc:
+                        dname = f"Tag personalizzato: {frame.desc}"
+                    if base == "APIC":
+                        raw  = getattr(frame, "data", b"")
+                        val  = (f"[{getattr(frame,'mime','?')}  {len(raw)//1024} KB]")
+                        edit, dele = False, True
+                    elif base in ("PRIV", "GEOB", "ENCR", "AENC"):
+                        raw  = getattr(frame, "data", b"")
+                        val  = f"[binario {len(raw)} B]  {raw[:16].hex()}"
+                        edit, dele = False, True
+                    elif hasattr(frame, "text") and frame.text:
+                        val  = str(frame.text[0])
+                        edit, dele = True, True
+                    else:
+                        val  = str(frame)
+                        edit, dele = False, True
+                    warn = "Rilevabile nel flusso audio" if base == "TSSE" else ""
+                    fields.append(self._field(key, dname, val, cat,
+                                              editable=edit, deletable=dele,
+                                              warning=warn))
+
+            # ID3v1 + LAME header (binary analysis)
+            try:
+                raw_data = path.read_bytes()
+                # ID3v2 size for LAME parser
+                id3v2_size = 0
+                if raw_data[:3] == b"ID3":
+                    id3v2_size = (10 + ((raw_data[6] & 0x7f) << 21
+                                        | (raw_data[7] & 0x7f) << 14
+                                        | (raw_data[8] & 0x7f) << 7
+                                        | (raw_data[9] & 0x7f)))
+                fields.extend(self._read_id3v1(raw_data))
+                fields.extend(self._parse_lame_header(raw_data, id3v2_size))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return fields
+
+    def _deep_flac(self, path: Path) -> list[dict]:
+        from mutagen.flac import FLAC
+        fields = []
+        try:
+            audio = FLAC(str(path))
+            # Vendor string — history
+            if audio.tags and hasattr(audio.tags, "vendor"):
+                v = audio.tags.vendor or ""
+                fields.append(self._field(
+                    "_vendor", "⏱ Vendor string (encoder)",
+                    v, "history", editable=False, deletable=False,
+                    warning="Rilevabile nel contenitore FLAC — non rimovibile senza ri-codifica"))
+            if audio.tags:
+                for key, values in audio.tags.as_dict().items():
+                    val = "; ".join(str(v) for v in values)
+                    cat = "standard" if key.lower() in _VORBIS_STANDARD else "custom"
+                    fields.append(self._field(key, key.capitalize(), val, cat))
+            if audio.pictures:
+                for pic in audio.pictures:
+                    fields.append(self._field(
+                        "_flac_pic", "Copertina album",
+                        f"[{pic.mime}  {len(pic.data)//1024} KB]",
+                        "art", editable=False))
+        except Exception:
+            pass
+        return fields
+
+    def _deep_ogg(self, path: Path) -> list[dict]:
+        fields = []
+        try:
+            ext = path.suffix.lower()
+            if ext == ".opus":
+                from mutagen.oggopus import OggOpus as Cls
+            else:
+                from mutagen.oggvorbis import OggVorbis as Cls
+            audio = Cls(str(path))
+            if audio.tags and hasattr(audio.tags, "vendor"):
+                v = audio.tags.vendor or ""
+                fields.append(self._field(
+                    "_vendor", "⏱ Vendor string (encoder)",
+                    v, "history", editable=False, deletable=False,
+                    warning="Rilevabile nel flusso — non rimovibile senza ri-codifica"))
+            if audio.tags:
+                for key, values in audio.tags.as_dict().items():
+                    val = "; ".join(str(v) for v in values)
+                    cat = "standard" if key.lower() in _VORBIS_STANDARD else "custom"
+                    fields.append(self._field(key, key.capitalize(), val, cat))
+        except Exception:
+            pass
+        return fields
+
+    def _deep_mp4(self, path: Path) -> list[dict]:
+        fields = []
+        try:
+            from mutagen.mp4 import MP4
+            audio = MP4(str(path))
+            if audio.tags:
+                for key, value in audio.tags.items():
+                    dname, cat = _MP4_INFO.get(
+                        key[:4] if key.startswith("----") else key,
+                        (f"Atom {key}", "hidden" if key.startswith("----") else "custom"))
+                    if key.startswith("----"):
+                        # custom iTunes atoms — often contain hidden data
+                        raw = value[0] if value else b""
+                        val = (raw.decode("utf-8", errors="replace")
+                               if isinstance(raw, bytes) else str(raw))
+                        warn = "Atom proprietario Apple/iTunes — possibile dato identificativo"
+                        fields.append(self._field(key, f"Atom: {key}", val,
+                                                   "hidden", editable=False,
+                                                   warning=warn))
+                        continue
+                    if key == "covr":
+                        val  = f"[immagine  {len(value[0])//1024 if value else 0} KB]"
+                        edit = False
+                    elif isinstance(value, list):
+                        val  = str(value[0]) if value else ""
+                        edit = True
+                    else:
+                        val  = str(value)
+                        edit = True
+                    fields.append(self._field(key, dname, val, cat, editable=edit))
+        except Exception:
+            pass
+        return fields
+
+    # ── ID3v1 (binary, last 128 bytes of MP3) ─────────────────────────────
+
+    def _read_id3v1(self, data: bytes) -> list[dict]:
+        """Detect and parse ID3v1 tag (128 bytes at EOF)."""
+        fields: list[dict] = []
+        if len(data) < 128 or data[-128:-125] != b"TAG":
+            return fields
+
+        def _s(b: bytes) -> str:
+            return b.rstrip(b"\x00").decode("latin-1", errors="replace").strip()
+
+        title   = _s(data[-125:-95])
+        artist  = _s(data[-95:-65])
+        album   = _s(data[-65:-35])
+        year    = _s(data[-35:-31])
+        comment = _s(data[-31:-3]) if data[-2] != 0 else _s(data[-31:-3])
+        track   = str(data[-1]) if data[-2] == 0 and data[-1] != 0 else ""
+        genre_i = data[-1] if data[-2] != 0 else 0
+        genre   = (_ID3V1_GENRES[genre_i]
+                   if genre_i < len(_ID3V1_GENRES) else str(genre_i))
+
+        fields.append(self._field(
+            "_id3v1_present",
+            "⚠ ID3v1 rilevato (coesiste con ID3v2)",
+            "Il file è stato processato da almeno due software di tagging diversi",
+            "history", editable=False, deletable=False,
+            warning="Presenza simultanea ID3v1+ID3v2 indica modifiche successive alla creazione"))
+
+        for raw_k, display, val in [
+            ("_id3v1_title",   "ID3v1 · Titolo",   title),
+            ("_id3v1_artist",  "ID3v1 · Artista",  artist),
+            ("_id3v1_album",   "ID3v1 · Album",    album),
+            ("_id3v1_year",    "ID3v1 · Anno",     year),
+            ("_id3v1_comment", "ID3v1 · Commento", comment),
+            ("_id3v1_track",   "ID3v1 · Traccia",  track),
+            ("_id3v1_genre",   "ID3v1 · Genere",   genre),
+        ]:
+            if val:
+                fields.append(self._field(raw_k, display, val, "history",
+                                          editable=False, deletable=True))
+        return fields
+
+    # ── LAME / Xing header (binary, inside first MPEG frame) ──────────────
+
+    def _parse_lame_header(self, data: bytes, id3v2_size: int) -> list[dict]:
+        """Parse Xing/Info VBR marker and LAME encoder tag from MP3 stream."""
+        fields: list[dict] = []
+        try:
+            offset = id3v2_size
+            # Find first MPEG sync word within first 64 KB
+            end = min(offset + 65536, len(data) - 4)
+            while offset < end:
+                if data[offset] == 0xff and (data[offset + 1] & 0xe0) == 0xe0:
+                    break
+                offset += 1
+            else:
+                return fields
+
+            hdr        = data[offset: offset + 4]
+            mpeg_ver   = (hdr[1] >> 3) & 3
+            chan_mode  = (hdr[3] >> 6) & 3
+            si_size    = _MPEG_SIDE_INFO.get((mpeg_ver, chan_mode), 17)
+
+            xing_off = offset + 4 + si_size
+            if xing_off + 4 > len(data):
+                return fields
+
+            marker = data[xing_off: xing_off + 4]
+            if marker not in (b"Xing", b"Info"):
+                return fields
+
+            vbr_type = "VBR (Xing)" if marker == b"Xing" else "CBR (Info)"
+            fields.append(self._field(
+                "_xing_type", "⏱ Tipo encoding nel flusso (Xing/Info)",
+                vbr_type, "history", editable=False, deletable=False,
+                warning="Rilevabile nel flusso audio — non rimovibile senza ri-codifica"))
+
+            # Parse frame/byte counts from Xing header flags
+            flags = int.from_bytes(data[xing_off + 4: xing_off + 8], "big")
+            pos   = xing_off + 8
+            if flags & 0x01:  # frame count
+                frames = int.from_bytes(data[pos: pos + 4], "big")
+                fields.append(self._field("_xing_frames", "Frame audio totali",
+                                          str(frames), "info",
+                                          editable=False, deletable=False))
+                pos += 4
+            if flags & 0x02:  # byte count
+                nbytes = int.from_bytes(data[pos: pos + 4], "big")
+                fields.append(self._field("_xing_bytes", "Byte audio totali",
+                                          str(nbytes), "info",
+                                          editable=False, deletable=False))
+
+            # Scan for LAME tag within first 512 bytes after Xing
+            search_area = data[xing_off: xing_off + 512]
+            lame_pos    = search_area.find(b"LAME")
+            if lame_pos != -1:
+                abs_pos  = xing_off + lame_pos
+                ver_raw  = data[abs_pos + 4: abs_pos + 13]
+                ver      = ver_raw.decode("latin-1", errors="replace").rstrip("\x00").strip()
+                fields.append(self._field(
+                    "_lame_ver", "⏱ Versione encoder LAME (stream)",
+                    f"LAME {ver}", "history", editable=False, deletable=False,
+                    warning="Impronta encoder nel flusso — non rimovibile senza ri-codifica"))
+        except Exception:
+            pass
+        return fields
+
+    # ── Album art (raw bytes → let UI render) ─────────────────────────────
+
+    def get_album_art(self, path: Path) -> bytes | None:
+        """Return raw album art bytes, or None if not found."""
+        try:
+            ext = path.suffix.lower()
+            if ext == ".mp3":
+                from mutagen.id3 import ID3
+                tags = ID3(str(path))
+                for key in tags.keys():
+                    if key.startswith("APIC"):
+                        return tags[key].data
+            elif ext == ".flac":
+                from mutagen.flac import FLAC
+                audio = FLAC(str(path))
+                if audio.pictures:
+                    return audio.pictures[0].data
+            elif ext in (".m4a", ".mp4"):
+                from mutagen.mp4 import MP4
+                audio = MP4(str(path))
+                if audio.tags and "covr" in audio.tags:
+                    return bytes(audio.tags["covr"][0])
+            elif ext in (".ogg", ".opus"):
+                import base64
+                from mutagen.flac import Picture
+                cls = (__import__("mutagen.oggopus", fromlist=["OggOpus"]).OggOpus
+                       if ext == ".opus"
+                       else __import__("mutagen.oggvorbis",
+                                       fromlist=["OggVorbis"]).OggVorbis)
+                audio = cls(str(path))
+                if audio.tags:
+                    raw_list = audio.tags.get("metadata_block_picture", [])
+                    if raw_list:
+                        pic = Picture(base64.b64decode(raw_list[0]))
+                        return pic.data
+        except Exception:
+            pass
+        return None
+
+    # ── File hash (SHA-256) ───────────────────────────────────────────────
+
+    @staticmethod
+    def get_file_hash(path: Path) -> str:
+        sha = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                sha.update(chunk)
+        return sha.hexdigest()
+
+    # ── Provenance analysis ───────────────────────────────────────────────
+
+    def compute_provenance(self, path: Path, fields: list[dict]) -> dict:
+        """
+        Analyse all available signals and return a provenance report:
+        {"verdict": str, "score": int 0-100, "signals": list[str],
+         "hash": str, "fs_created": str, "fs_modified": str}
+        score: 0 = probably original, 100 = heavily modified
+        """
+        signals: list[str] = []
+        score = 0
+
+        # ── Filesystem timestamps ─────────────────────────────────────────
+        try:
+            stat   = path.stat()
+            fs_mod = datetime.fromtimestamp(stat.st_mtime)
+            fs_cre = datetime.fromtimestamp(stat.st_ctime)
+            fs_created  = fs_cre.strftime("%Y-%m-%d %H:%M:%S")
+            fs_modified = fs_mod.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            fs_created = fs_modified = "N/D"
+
+        # ── Signal analysis ───────────────────────────────────────────────
+        def _val(raw_key: str) -> str | None:
+            for f in fields:
+                if f["raw_key"] == raw_key:
+                    return f["value"]
+            return None
+
+        # ID3v1 + ID3v2 coexistence → strong modification signal
+        if any(f["raw_key"] == "_id3v1_present" for f in fields):
+            score += 35
+            signals.append("ID3v1 + ID3v2 coesistono — il file è stato ritaggato "
+                            "dopo la creazione originale")
+
+        # TDTG: explicit tagging timestamp
+        tdtg = _val("TDTG")
+        if tdtg:
+            score += 20
+            signals.append(f"Tag scritti/modificati il: {tdtg}")
+
+        # TENC / encoding software
+        tenc = _val("TENC")
+        if tenc:
+            score += 10
+            signals.append(f"Software di tagging/encoding: {tenc}")
+
+        # TSSE: encoder settings (stored by some encoders)
+        tsse = _val("TSSE")
+        if tsse:
+            score += 5
+            signals.append(f"Impostazioni encoder: {tsse}")
+
+        # LAME version in stream
+        lame = _val("_lame_ver")
+        if lame:
+            signals.append(f"Encoder nel flusso audio: {lame}")
+
+        # Vendor string (FLAC/OGG)
+        vendor = _val("_vendor")
+        if vendor:
+            signals.append(f"Vendor string (tagging software): {vendor}")
+
+        # TOFN: original filename stored in tag
+        tofn = _val("TOFN")
+        if tofn:
+            score += 10
+            signals.append(f"Nome file originale conservato nei tag: {tofn}")
+
+        # iTunes custom atoms
+        apple_count = sum(1 for f in fields
+                          if f["raw_key"].startswith("----:"))
+        if apple_count:
+            score += 10
+            signals.append(f"{apple_count} atom iTunes personalizzato/i "
+                            "(tracce di iTunes/Music)")
+
+        # Hidden/private frames
+        hidden = [f for f in fields if f["category"] == "hidden"]
+        if hidden:
+            score += 10
+            signals.append(f"{len(hidden)} campo/i nascosto/i "
+                            "(PRIV, UFID, GEOB, …)")
+
+        # Filesystem modification vs embedded recording year
+        for rk in ("TDRC", "©day", "date", "_id3v1_year"):
+            rec_year = _val(rk)
+            if rec_year and fs_modified != "N/D":
+                try:
+                    ry = int(str(rec_year)[:4])
+                    fy = datetime.strptime(fs_modified, "%Y-%m-%d %H:%M:%S").year
+                    if fy > ry + 1:
+                        score += 5
+                        signals.append(
+                            f"File modificato nel {fy}, "
+                            f"ma data registrazione nei tag: {ry}")
+                except Exception:
+                    pass
+                break
+
+        # TPE4: remixed/modified by
+        tpe4 = _val("TPE4")
+        if tpe4:
+            score += 5
+            signals.append(f"Remixato / modificato da: {tpe4}")
+
+        # ── Verdict ───────────────────────────────────────────────────────
+        if score == 0 and not signals:
+            verdict = ("🟢  Probabilmente originale — "
+                       "nessuna traccia di modifiche ai metadati")
+        elif score < 20:
+            verdict = "🟡  Poche tracce — ritaggato in modo pulito"
+        elif score < 50:
+            verdict = "🟠  Modificato — presenti tracce di lavorazione"
+        else:
+            verdict = ("🔴  Pesantemente modificato — "
+                       "molteplici strumenti hanno toccato il file")
+
+        # File hash
+        try:
+            file_hash = self.get_file_hash(path)
+        except Exception:
+            file_hash = "N/D"
+
+        return {
+            "verdict":     verdict,
+            "score":       min(score, 100),
+            "signals":     signals,
+            "hash":        file_hash,
+            "fs_created":  fs_created,
+            "fs_modified": fs_modified,
+        }
+
+    # ── Export metadata report ────────────────────────────────────────────
+
+    def export_report(
+        self,
+        path:        Path,
+        fields:      list[dict],
+        provenance:  dict,
+        output_path: Path,
+    ) -> AudioResult:
+        """Export full metadata report as TXT or JSON."""
+        try:
+            if output_path.suffix.lower() == ".json":
+                data = {
+                    "file":       str(path),
+                    "analyzed":   datetime.now().isoformat(),
+                    "provenance": provenance,
+                    "fields": [
+                        {"key": f["raw_key"], "name": f["display_name"],
+                         "value": f["value"], "category": f["category"]}
+                        for f in fields
+                    ],
+                }
+                output_path.write_text(
+                    json.dumps(data, indent=2, ensure_ascii=False),
+                    encoding="utf-8")
+            else:
+                _CAT_LABELS_LOCAL = {
+                    "standard":  "TAG STANDARD",
+                    "technical": "TECNICI",
+                    "history":   "STORICO / PROVENIENZA",
+                    "hidden":    "DATI NASCOSTI / PRIVATI",
+                    "custom":    "TAG PERSONALIZZATI",
+                    "art":       "IMMAGINI INCORPORATE",
+                    "info":      "INFORMAZIONI FILE",
+                }
+                lines = [
+                    "═" * 60,
+                    "  Multimedia Master — Report Metadati",
+                    "═" * 60,
+                    f"  File:       {path.name}",
+                    f"  Percorso:   {path}",
+                    f"  Analizzato: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                    f"  SHA-256:    {provenance['hash']}",
+                    f"  Creato:     {provenance['fs_created']}",
+                    f"  Modificato: {provenance['fs_modified']}",
+                    "",
+                    "── PROVENIENZA " + "─" * 44,
+                    f"  {provenance['verdict']}",
+                    f"  Score: {provenance['score']}/100",
+                ]
+                if provenance["signals"]:
+                    lines.append("")
+                    for s in provenance["signals"]:
+                        lines.append(f"  • {s}")
+                lines.append("")
+
+                current_cat = None
+                for f in fields:
+                    if f["category"] != current_cat:
+                        current_cat = f["category"]
+                        lbl = _CAT_LABELS_LOCAL.get(current_cat, current_cat.upper())
+                        lines.append(f"── {lbl} " + "─" * max(1, 55 - len(lbl)))
+                    val = f["value"]
+                    if len(val) > 80:
+                        val = val[:77] + "…"
+                    lines.append(f"  {f['display_name']:<38} {val}")
+                lines.append("")
+                lines.append("═" * 60)
+                output_path.write_text("\n".join(lines), encoding="utf-8")
+
+            return AudioResult(output=output_path, success=True)
+        except Exception as exc:
+            return AudioResult(output=output_path, success=False, error=str(exc))
+
+    def save_meta_changes(
+        self,
+        path:      Path,
+        changes:   dict[str, str],   # raw_key → new value
+        deletions: set[str],         # raw_keys to remove
+    ) -> AudioResult:
+        """Write edited fields and remove deleted ones. Modifies file in place."""
+        try:
+            import mutagen
+            ext = path.suffix.lower()
+
+            if ext == ".mp3":
+                from mutagen.id3 import ID3, ID3NoHeaderError
+                try:
+                    tags = ID3(str(path))
+                except ID3NoHeaderError:
+                    tags = ID3()
+                # Deletions
+                for key in deletions:
+                    if not key.startswith("_") and key in tags:
+                        del tags[key]
+                # Changes — use easy interface for standard fields
+                mf_easy = mutagen.File(str(path), easy=True)
+                if mf_easy:
+                    _easy_map = {
+                        "TIT2": "title", "TPE1": "artist", "TALB": "album",
+                        "TDRC": "date",  "TRCK": "tracknumber", "TCON": "genre",
+                        "COMM": "comment",
+                    }
+                    for raw_key, val in changes.items():
+                        if raw_key.startswith("_"):
+                            continue
+                        easy_key = _easy_map.get(raw_key[:4])
+                        if easy_key and mf_easy:
+                            if val:
+                                mf_easy[easy_key] = [val]
+                            elif easy_key in mf_easy:
+                                del mf_easy[easy_key]
+                    mf_easy.save()
+                else:
+                    tags.save(str(path))
+
+            elif ext == ".flac":
+                from mutagen.flac import FLAC
+                audio = FLAC(str(path))
+                if audio.tags is None:
+                    audio.add_tags()
+                for key in deletions:
+                    if not key.startswith("_") and key in audio.tags:
+                        del audio.tags[key]
+                for key, val in changes.items():
+                    if key.startswith("_"):
+                        continue
+                    if val:
+                        audio.tags[key] = [val]
+                    elif key in audio.tags:
+                        del audio.tags[key]
+                audio.save()
+
+            elif ext in (".ogg", ".opus"):
+                if ext == ".opus":
+                    from mutagen.oggopus import OggOpus as Cls
+                else:
+                    from mutagen.oggvorbis import OggVorbis as Cls
+                audio = Cls(str(path))
+                if audio.tags is None:
+                    audio.add_tags()
+                for key in deletions:
+                    if not key.startswith("_") and key in audio.tags:
+                        del audio.tags[key]
+                for key, val in changes.items():
+                    if key.startswith("_"):
+                        continue
+                    if val:
+                        audio.tags[key] = [val]
+                    elif key in audio.tags:
+                        del audio.tags[key]
+                audio.save()
+
+            elif ext in (".m4a", ".mp4"):
+                from mutagen.mp4 import MP4
+                audio = MP4(str(path))
+                if audio.tags is None:
+                    audio.add_tags()
+                for key in deletions:
+                    if not key.startswith("_") and key in audio.tags:
+                        del audio.tags[key]
+                for key, val in changes.items():
+                    if key.startswith("_") or key.startswith("----"):
+                        continue
+                    if val:
+                        audio.tags[key] = [val]
+                    elif key in audio.tags:
+                        del audio.tags[key]
+                audio.save()
+
+            else:
+                mf = mutagen.File(str(path), easy=True)
+                if mf:
+                    for k in deletions:
+                        if not k.startswith("_") and k in mf:
+                            del mf[k]
+                    for k, v in changes.items():
+                        if k.startswith("_"):
+                            continue
+                        if v:
+                            mf[k] = [v]
+                        elif k in mf:
+                            del mf[k]
+                    mf.save()
+
+            return AudioResult(output=path, success=True)
+        except Exception as exc:
+            return AudioResult(output=path, success=False, error=str(exc))
+
+    def forensic_wipe(self, path: Path) -> AudioResult:
+        """
+        Remove ALL metadata traces (modifies file in place).
+        Step 1 — ffmpeg remux with -map_metadata -1 (strips container metadata)
+        Step 2 — mutagen clear any remaining tags
+        Note: encoder fingerprints embedded IN the audio stream (LAME header,
+        FLAC STREAMINFO encoder field, OGG vendor string) cannot be removed
+        without re-encoding, which would degrade quality in lossy formats.
+        """
+        tmp = Path(tempfile.mktemp(suffix=path.suffix))
+        try:
+            if self._ffmpeg:
+                res = subprocess.run(
+                    [self._ffmpeg, "-y", "-i", str(path),
+                     "-map_metadata", "-1",
+                     "-map_chapters", "-1",
+                     "-c:a", "copy",
+                     str(tmp)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    encoding="utf-8", errors="replace",
+                )
+                if res.returncode != 0:
+                    return AudioResult(
+                        output=path, success=False,
+                        error=f"ffmpeg: {(res.stderr or '').strip()[-200:]}")
+            else:
+                shutil.copy2(str(path), str(tmp))
+
+            # Second pass: mutagen strip
+            try:
+                import mutagen
+                mf = mutagen.File(str(tmp))
+                if mf and mf.tags:
+                    mf.tags.clear()
+                    mf.save()
+            except Exception:
+                pass
+
+            shutil.move(str(tmp), str(path))
+            return AudioResult(output=path, success=True)
+        except Exception as exc:
+            if tmp.exists():
+                tmp.unlink(missing_ok=True)
+            return AudioResult(output=path, success=False, error=str(exc))
+
+    def strip_tags(self, path: Path) -> AudioResult:
+        """Remove ALL metadata tags from the file (modifies in place)."""
+        try:
+            import mutagen
+            mf = mutagen.File(str(path))
+            if not mf:
+                return AudioResult(output=path, success=False,
+                                   error="Formato non supportato da mutagen.")
+            if mf.tags:
+                mf.tags.clear()
+                mf.save()
+            return AudioResult(output=path, success=True)
+        except Exception as exc:
+            return AudioResult(output=path, success=False, error=str(exc))
+
+    def analyze_file(self, path: Path) -> dict:
+        """
+        Health and safety analysis of an audio file.
+        Returns {"safe": bool, "issues": list[str], "details": list[str]}
+        """
+        issues:  list[str] = []
+        details: list[str] = []
+
+        # 1 — File size sanity
+        try:
+            size = path.stat().st_size
+            if size == 0:
+                issues.append("File vuoto (0 byte)")
+            elif size < 512:
+                issues.append(f"File sospettosamente piccolo ({size} byte)")
+            else:
+                details.append(f"Dimensione: {size / 1024:.1f} KB")
+        except Exception as e:
+            issues.append(f"Impossibile leggere il file: {e}")
+
+        # 2 — Magic bytes vs extension
+        _MAGIC: dict[str, list[tuple[int, bytes]]] = {
+            ".mp3":  [(0, b"ID3"), (0, b"\xff\xfb"), (0, b"\xff\xfa"),
+                      (0, b"\xff\xf3"), (0, b"\xff\xf2")],
+            ".flac": [(0, b"fLaC")],
+            ".ogg":  [(0, b"OggS")],
+            ".opus": [(0, b"OggS")],
+            ".wav":  [(0, b"RIFF")],
+            ".m4a":  [(4, b"ftyp")],
+            ".mp4":  [(4, b"ftyp")],
+            ".aac":  [(0, b"\xff\xf1"), (0, b"\xff\xf9")],
+        }
+        try:
+            header = path.read_bytes()[:12]
+            ext    = path.suffix.lower()
+            checks = _MAGIC.get(ext, [])
+            if checks:
+                ok = any(header[off:off + len(sig)] == sig
+                         for off, sig in checks)
+                if ok:
+                    details.append("Intestazione file corretta")
+                else:
+                    issues.append(
+                        f"Intestazione non corrisponde all'estensione {ext} "
+                        "(il file potrebbe essere rinominato o corrotto)")
+        except Exception as e:
+            issues.append(f"Impossibile leggere l'intestazione: {e}")
+
+        # 3 — Full decode check via ffmpeg
+        if self._ffmpeg:
+            try:
+                res = subprocess.run(
+                    [self._ffmpeg, "-v", "error", "-i", str(path),
+                     "-f", "null", "-"],
+                    stderr=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    encoding="utf-8", errors="replace",
+                    timeout=60,
+                )
+                if res.returncode == 0:
+                    details.append("Decodifica ffmpeg: nessun errore")
+                else:
+                    stderr = (res.stderr or "").strip()
+                    snippet = stderr[-300:] if len(stderr) > 300 else stderr
+                    issues.append(f"Errori di decodifica: {snippet}")
+            except subprocess.TimeoutExpired:
+                issues.append("Timeout verifica — file potenzialmente corrotto")
+            except Exception as e:
+                issues.append(f"Errore durante la verifica: {e}")
+        else:
+            details.append("ffmpeg non disponibile — verifica decodifica saltata")
+
+        # 4 — Tag content safety
+        try:
+            import mutagen
+            mf = mutagen.File(str(path), easy=True)
+            if mf and mf.tags:
+                n = len(mf.tags)
+                details.append(f"Tag presenti: {n}")
+                for key, value in mf.tags.items():
+                    v = str(value[0]) if isinstance(value, (list, tuple)) else str(value)
+                    if len(v) > 1000:
+                        issues.append(
+                            f"Tag '{key}' insolitamente lungo ({len(v)} caratteri)")
+                    lower = v.lower()
+                    if any(x in lower for x in
+                           ("javascript:", "<script", "vbscript:")):
+                        issues.append(
+                            f"Tag '{key}' contiene contenuto script: {v[:80]}")
+                    elif any(x in lower for x in ("http://", "https://")):
+                        details.append(f"Tag '{key}' contiene URL (non pericoloso)")
+            else:
+                details.append("Nessun tag trovato")
+        except Exception as e:
+            details.append(f"Lettura tag non disponibile: {e}")
+
+        return {
+            "safe":    len(issues) == 0,
+            "issues":  issues,
+            "details": details,
+        }
 
     # ── Internal helpers ──────────────────────────────────────────────────
 

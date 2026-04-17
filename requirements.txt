@@ -28,6 +28,7 @@ noisereduce>=3.0.0      # spectral gating noise reduction
 numpy>=1.26.0           # array operations (shared dep)
 scipy>=1.12.0           # Butterworth EQ filters
 mutagen>=1.47.0         # ID3 / Vorbis / MP4 / FLAC tag read+write
+simpleaudio>=1.0.4      # riproduzione audio nel tab "Modifica" (cursor + play/stop)
 
 # ── Stem separation (optional — ~2 GB, requires PyTorch first) ────────────────
 # pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
