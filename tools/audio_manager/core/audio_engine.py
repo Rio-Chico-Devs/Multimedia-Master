@@ -428,6 +428,77 @@ class AudioEngine:
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
 
+    # ── Voice cleaner (WAV → web-optimised MP3) ────────────────────────────
+
+    def clean_voice(
+        self,
+        src:       Path,
+        output:    Path,
+        preset:    str = "normale",    # "leggero" | "normale" | "intenso"
+        mp3_q:     int = 2,            # libmp3lame VBR: 0(best) – 9(worst); 2 ≈ 190 kbps
+        to_mono:   bool = False,
+        sample_rate: int = 44100,
+    ) -> AudioResult:
+        """
+        Voice cleaner: removes rumble, reduces noise, normalises loudness to
+        broadcast standard (EBU R128), and encodes to a web-optimised MP3.
+
+        All filters are conservative to preserve the original voice character.
+        Pipeline is pure ffmpeg, so there's no Python audio-processing risk of
+        truncation, clipping or resampling artefacts.
+        """
+        if not self._ffmpeg:
+            return AudioResult(output=output, success=False,
+                               error="ffmpeg non trovato. pip install imageio-ffmpeg")
+
+        # Filter chain per preset
+        if preset == "leggero":
+            afilter = (
+                "highpass=f=60,"
+                "loudnorm=I=-16:TP=-1.5:LRA=11"
+            )
+        elif preset == "intenso":
+            afilter = (
+                "highpass=f=85,"
+                "afftdn=nr=20:nf=-20:tn=1,"
+                "equalizer=f=3000:t=o:w=2:g=1.8,"
+                "loudnorm=I=-16:TP=-1.5:LRA=11"
+            )
+        else:  # "normale" — balanced, safe default
+            afilter = (
+                "highpass=f=80,"
+                "afftdn=nr=12:nf=-25:tn=1,"
+                "loudnorm=I=-16:TP=-1.5:LRA=11"
+            )
+
+        try:
+            cmd = [
+                self._ffmpeg, "-y", "-i", str(src),
+                "-af", afilter,
+                "-ar", str(sample_rate),
+            ]
+            if to_mono:
+                cmd += ["-ac", "1"]
+            cmd += [
+                "-c:a", "libmp3lame",
+                "-q:a", str(mp3_q),
+                "-map_metadata", "-1",   # strip metadata for clean web file
+                str(output),
+            ]
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                encoding="utf-8",
+                errors="replace",
+            )
+            if proc.returncode != 0:
+                err = proc.stderr.strip()[-400:] if proc.stderr else "Errore sconosciuto"
+                return AudioResult(output=output, success=False, error=err)
+            return self._ok(output)
+        except Exception as exc:
+            return AudioResult(output=output, success=False, error=str(exc))
+
     # ── Trim ──────────────────────────────────────────────────────────────
 
     def trim(
@@ -485,13 +556,34 @@ class AudioEngine:
         mid_db:    float = 0.0,   # gain for 250–4000 Hz
         treble_db: float = 0.0,   # gain for >4000 Hz
     ) -> AudioResult:
-        """Apply a 3-band shelving EQ using Butterworth filters. Requires scipy."""
+        """
+        Apply a 3-band shelving EQ using Butterworth filters. Requires scipy.
+        For formats soundfile can't read (MP3/AAC), decodes to a temp WAV first,
+        applies EQ, then re-encodes to the desired output format.
+        """
+        _PCM_EXTS = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
+        tmp_in:  Path | None = None
+        tmp_out: Path | None = None
         try:
             import soundfile as sf
             import numpy as np
             from scipy.signal import butter, sosfilt
 
-            data, sr = sf.read(str(src), always_2d=True)
+            # If source can't be read directly, decode to temp WAV
+            need_decode = src.suffix.lower() not in _PCM_EXTS
+            if need_decode:
+                if not self._ffmpeg:
+                    return AudioResult(output=output, success=False,
+                                       error="ffmpeg necessario per la EQ su MP3/AAC")
+                tmp_in = Path(tempfile.mktemp(suffix=".wav"))
+                r = self.convert(src, tmp_in, "wav")
+                if not r.success:
+                    return r
+                read_src = tmp_in
+            else:
+                read_src = src
+
+            data, sr = sf.read(str(read_src), always_2d=True)
 
             def _gain(db: float) -> float:
                 return 10 ** (db / 20.0)
@@ -506,20 +598,90 @@ class AudioEngine:
                     sos = butter(4, [lo / nyq, hi / nyq], btype="band", output="sos")
                 return sosfilt(sos, data, axis=0)
 
-            result = (
-                _filter(None,  250.0) * _gain(bass_db)
+            eq_data = (
+                _filter(None,   250.0) * _gain(bass_db)
                 + _filter(250.0, 4000.0) * _gain(mid_db)
-                + _filter(4000.0, None) * _gain(treble_db)
+                + _filter(4000.0, None)   * _gain(treble_db)
             )
 
             # Prevent clipping
-            peak = np.max(np.abs(result))
+            peak = np.max(np.abs(eq_data))
             if peak > 1.0:
-                result /= peak
+                eq_data /= peak
 
-            out_fmt = {".flac": "flac", ".wav": "WAV"}.get(output.suffix.lower(), "WAV")
-            sf.write(str(output), result, sr, format=out_fmt)
-            return self._ok(output, len(data) / float(sr))
+            # If output must be a non-PCM format, write WAV first then convert
+            need_encode = output.suffix.lower() not in _PCM_EXTS
+            if need_encode:
+                tmp_out = Path(tempfile.mktemp(suffix=".wav"))
+                sf.write(str(tmp_out), eq_data, sr, format="WAV")
+                return self.convert(tmp_out, output, output.suffix.lstrip("."))
+            else:
+                out_fmt = {".flac": "flac", ".wav": "WAV", ".ogg": "ogg"}.get(
+                    output.suffix.lower(), "WAV")
+                sf.write(str(output), eq_data, sr, format=out_fmt)
+                return self._ok(output, len(data) / float(sr))
+        except Exception as exc:
+            return AudioResult(output=output, success=False, error=str(exc))
+        finally:
+            for t in (tmp_in, tmp_out):
+                if t:
+                    t.unlink(missing_ok=True)
+
+    # ── Split ─────────────────────────────────────────────────────────────
+
+    def split(
+        self,
+        src:             Path,
+        output_dir:      Path,
+        split_points_ms: list[int],
+    ) -> list[AudioResult]:
+        """
+        Split audio at the given millisecond positions.
+        Produces N+1 files named <stem>_part01<ext>, _part02, …
+        Returns a list of AudioResult (one per output file).
+        """
+        try:
+            from pydub import AudioSegment
+            audio    = AudioSegment.from_file(str(src))
+            total_ms = len(audio)
+            fmt      = src.suffix.lstrip(".")
+
+            points = [0] + sorted(int(p) for p in split_points_ms) + [total_ms]
+            results: list[AudioResult] = []
+            for i, (a, b) in enumerate(zip(points, points[1:]), start=1):
+                clip = audio[a:b]
+                out  = output_dir / f"{src.stem}_part{i:02d}{src.suffix}"
+                clip.export(str(out), format=fmt)
+                results.append(self._ok(out, len(clip) / 1000.0))
+            return results
+        except Exception as exc:
+            return [AudioResult(output=None, success=False, error=str(exc))]
+
+    # ── Mute region ───────────────────────────────────────────────────────
+
+    def mute_region(
+        self,
+        src:      Path,
+        output:   Path,
+        start_ms: int,
+        end_ms:   int,
+    ) -> AudioResult:
+        """
+        Silence the audio between start_ms and end_ms (replace with silence).
+        The file length is preserved.
+        """
+        try:
+            from pydub import AudioSegment
+            audio    = AudioSegment.from_file(str(src))
+            end_ms   = min(end_ms, len(audio))
+            silence  = AudioSegment.silent(
+                duration=end_ms - start_ms,
+                frame_rate=audio.frame_rate,
+            ).set_channels(audio.channels).set_sample_width(audio.sample_width)
+            muted = audio[:start_ms] + silence + audio[end_ms:]
+            fmt   = output.suffix.lstrip(".")
+            muted.export(str(output), format=fmt)
+            return self._ok(output, len(muted) / 1000.0)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
 
@@ -556,23 +718,41 @@ class AudioEngine:
         """
         Return (pos_peaks, neg_peaks) normalised to [0, 1].
         Fast: reads full file once, splits into N chunks, takes max/min per chunk.
+        Falls back to ffmpeg-decoded WAV for formats soundfile can't read (MP3/AAC…).
         """
+        tmp: Path | None = None
         try:
             import soundfile as sf
             import numpy as np
 
-            data, _ = sf.read(str(path), always_2d=False)
+            try:
+                data, _ = sf.read(str(path), always_2d=False)
+            except Exception:
+                # soundfile can't read MP3/AAC — decode to a temp WAV via ffmpeg
+                if not self._ffmpeg:
+                    return [0.0] * num_samples, [0.0] * num_samples
+                tmp = Path(tempfile.mktemp(suffix=".wav"))
+                subprocess.run(
+                    [self._ffmpeg, "-y", "-i", str(path), str(tmp)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    encoding="utf-8", errors="replace",
+                )
+                data, _ = sf.read(str(tmp), always_2d=False)
+
             if data.ndim > 1:
                 data = data.mean(axis=1)   # mix to mono
 
             chunks = np.array_split(data, num_samples)
-            pos = [float(np.max(c))  if len(c) else 0.0 for c in chunks]
-            neg = [float(np.min(c))  if len(c) else 0.0 for c in chunks]
+            pos = [float(np.max(c)) if len(c) else 0.0 for c in chunks]
+            neg = [float(np.min(c)) if len(c) else 0.0 for c in chunks]
 
             peak = max(max(abs(v) for v in pos + neg), 1e-6)
             return [v / peak for v in pos], [v / peak for v in neg]
         except Exception:
             return [0.0] * num_samples, [0.0] * num_samples
+        finally:
+            if tmp:
+                tmp.unlink(missing_ok=True)
 
     # ── Stem separation (demucs) ──────────────────────────────────────────
 

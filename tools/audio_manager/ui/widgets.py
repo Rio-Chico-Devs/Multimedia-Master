@@ -28,23 +28,30 @@ _WF_SHADE    = "#00000077" # dim outside trim region
 _WF_MARKER_S = "#4caf50"   # start marker (green)
 _WF_MARKER_E = "#f44336"   # end   marker (red)
 _WF_CENTER   = "#2a2a2a"   # centre-line colour
+_WF_CURSOR   = "#ffffff"   # playhead cursor colour
 
 
 # ── WaveformCanvas ─────────────────────────────────────────────────────────────
 
 class WaveformCanvas(tk.Canvas):
     """
-    Displays an audio waveform with two draggable trim markers.
+    Displays an audio waveform with two draggable trim markers and a playhead.
 
     Usage:
-        wf = WaveformCanvas(parent, height=100)
+        wf = WaveformCanvas(parent, height=100,
+                            on_trim_change=cb_trim,
+                            on_cursor_change=cb_cursor)
         wf.load_peaks(pos_peaks, neg_peaks, duration_ms)
         start_ms, end_ms = wf.get_trim_range()
+        cursor_ms = wf.get_cursor()
     """
 
     HANDLE_R = 6   # half-width of drag handle in pixels
 
-    def __init__(self, parent, height: int = 100, **kw):
+    def __init__(self, parent, height: int = 100,
+                 on_trim_change:   Callable[[int, int], None] | None = None,
+                 on_cursor_change: Callable[[int], None]       | None = None,
+                 **kw):
         kw.setdefault("bg", _WF_BG)
         kw.setdefault("highlightthickness", 0)
         kw.setdefault("height", height)
@@ -55,8 +62,12 @@ class WaveformCanvas(tk.Canvas):
         self._duration_ms: int = 0
         self._start_ms:    int = 0
         self._end_ms:      int = 0
+        self._cursor_ms:   int = 0
         self._photo:       ImageTk.PhotoImage | None = None
-        self._dragging:    str | None = None   # "start" or "end"
+        self._dragging:    str | None = None   # "start", "end", or None
+
+        self._on_trim_change   = on_trim_change
+        self._on_cursor_change = on_cursor_change
 
         self.bind("<Configure>",       self._on_resize)
         self.bind("<ButtonPress-1>",   self._on_press)
@@ -73,6 +84,7 @@ class WaveformCanvas(tk.Canvas):
         self._duration_ms = duration_ms
         self._start_ms    = 0
         self._end_ms      = duration_ms
+        self._cursor_ms   = 0
         self._draw()
 
     def clear(self) -> None:
@@ -81,6 +93,7 @@ class WaveformCanvas(tk.Canvas):
         self._duration_ms = 0
         self._start_ms    = 0
         self._end_ms      = 0
+        self._cursor_ms   = 0
         self.delete("all")
         self._photo = None
 
@@ -90,6 +103,14 @@ class WaveformCanvas(tk.Canvas):
     def set_trim_range(self, start_ms: int, end_ms: int) -> None:
         self._start_ms = max(0, start_ms)
         self._end_ms   = min(self._duration_ms, end_ms)
+        self._draw_overlays()
+
+    def get_cursor(self) -> int:
+        return self._cursor_ms
+
+    def set_cursor(self, ms: int) -> None:
+        """Move the playhead to the given position (does NOT fire callback)."""
+        self._cursor_ms = max(0, min(ms, self._duration_ms))
         self._draw_overlays()
 
     # ── Drawing ─────────────────────────────────────────────────────────────
@@ -125,15 +146,16 @@ class WaveformCanvas(tk.Canvas):
         self._draw_overlays()
 
     def _draw_overlays(self) -> None:
-        """Draw trim shading + handles on top of the waveform."""
+        """Draw trim shading + handles + playhead on top of the waveform."""
         self.delete("overlay")
         if self._duration_ms <= 0:
             return
         w   = max(self.winfo_width(),  1)
         h   = max(self.winfo_height(), 1)
         mid = h // 2
-        sx  = int(self._start_ms / self._duration_ms * w)
-        ex  = int(self._end_ms   / self._duration_ms * w)
+        sx  = int(self._start_ms  / self._duration_ms * w)
+        ex  = int(self._end_ms    / self._duration_ms * w)
+        cx  = int(self._cursor_ms / self._duration_ms * w)
         r   = self.HANDLE_R
 
         # Shade outside selection
@@ -154,6 +176,13 @@ class WaveformCanvas(tk.Canvas):
         self.create_rectangle(ex - r, mid - r*2, ex + r, mid + r*2,
                                fill=_WF_MARKER_E, outline="", tags="overlay")
 
+        # Playhead cursor (thin white line with small top triangle)
+        if 0 <= cx <= w:
+            self.create_line(cx, 0, cx, h, fill=_WF_CURSOR, width=1,
+                             dash=(4, 2), tags="overlay")
+            self.create_polygon(cx - 4, 0, cx + 4, 0, cx, 6,
+                                fill=_WF_CURSOR, outline="", tags="overlay")
+
     def _on_resize(self, _=None) -> None:
         if self._pos_peaks:
             self._draw()
@@ -171,7 +200,13 @@ class WaveformCanvas(tk.Canvas):
         elif abs(event.x - ex) <= r:
             self._dragging = "end"
         else:
+            # Click on waveform (not on a marker) → move cursor/playhead
             self._dragging = None
+            ms = int(max(0, min(event.x, w)) / w * self._duration_ms)
+            self._cursor_ms = ms
+            self._draw_overlays()
+            if self._on_cursor_change:
+                self._on_cursor_change(ms)
 
     def _on_move(self, event) -> None:
         if not self._dragging or self._duration_ms <= 0:
@@ -185,6 +220,8 @@ class WaveformCanvas(tk.Canvas):
         else:
             self._end_ms = max(ms, self._start_ms + GAP)
         self._draw_overlays()
+        if self._on_trim_change:
+            self._on_trim_change(self._start_ms, self._end_ms)
 
 
 # ── MediaFilePicker ────────────────────────────────────────────────────────────

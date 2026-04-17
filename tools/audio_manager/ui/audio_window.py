@@ -1,13 +1,14 @@
 """
 Audio Manager main window.
 
-Six tabs:
+Seven tabs:
   1. Converti  — batch format conversion + quality presets
   2. Estrai    — extract audio track from any video
-  3. Migliora  — noise reduction + normalisation
-  4. Modifica  — trim, EQ, volume, fade, speed + waveform
-  5. Separa    — stem separation via demucs
-  6. Metadati  — ID3 / Vorbis / MP4 tag editor + album art
+  3. Pulisci   — batch voice cleaner: WAV → web-optimised MP3
+  4. Migliora  — noise reduction + normalisation
+  5. Modifica  — trim, EQ, volume, fade, speed, split + waveform
+  6. Separa    — stem separation via demucs
+  7. Metadati  — ID3 / Vorbis / MP4 tag editor + album art
 
 Dependency check runs once at startup; DepStatus is forwarded to tabs
 so they can self-disable and show install instructions gracefully.
@@ -21,6 +22,7 @@ from core.dependencies import check as check_deps, install_hint
 
 from .convert_tab  import ConvertTab
 from .extract_tab  import ExtractTab
+from .clean_tab    import CleanTab
 from .enhance_tab  import EnhanceTab
 from .edit_tab     import EditTab
 from .stems_tab    import StemsTab
@@ -63,7 +65,7 @@ class AudioWindow(ctk.CTk):
         tabs = ctk.CTkTabview(self, corner_radius=10)
         tabs.pack(fill="both", expand=True, padx=16, pady=(10, 16))
 
-        for name in ("Converti", "Estrai", "Migliora",
+        for name in ("Converti", "Estrai", "Pulisci", "Migliora",
                      "Modifica", "Separa", "Metadati"):
             tabs.add(name)
 
@@ -73,6 +75,9 @@ class AudioWindow(ctk.CTk):
         ExtractTab(tabs.tab("Estrai"),
                    engine=self._engine,
                    ffmpeg_ok=self._deps.ffmpeg).pack(fill="both", expand=True)
+
+        CleanTab(tabs.tab("Pulisci"),
+                 engine=self._engine).pack(fill="both", expand=True)
 
         EnhanceTab(tabs.tab("Migliora"),
                    engine=self._engine,
