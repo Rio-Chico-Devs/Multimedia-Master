@@ -390,12 +390,29 @@ class AudioEngine:
         prop_decrease: float = 0.75,
         progress_cb:   Callable[[float], None] | None = None,
     ) -> AudioResult:
-        """Reduce noise and/or normalize loudness. Requires soundfile + numpy."""
+        """Reduce noise and/or normalize loudness. Requires soundfile + numpy.
+        For formats soundfile can't read (MP3/AAC), decodes to temp WAV first."""
+        _PCM_EXTS = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
+        tmp_in:  Path | None = None
+        tmp_out: Path | None = None
         try:
             import soundfile as sf
             import numpy as np
 
-            data, sr = sf.read(str(src), always_2d=True)  # (frames, ch)
+            need_decode = src.suffix.lower() not in _PCM_EXTS
+            if need_decode:
+                if not self._ffmpeg:
+                    return AudioResult(output=output, success=False,
+                                       error="ffmpeg necessario per elaborare MP3/AAC")
+                tmp_in = Path(tempfile.mktemp(suffix=".wav"))
+                r = self.convert(src, tmp_in, "wav")
+                if not r.success:
+                    return r
+                read_src = tmp_in
+            else:
+                read_src = src
+
+            data, sr = sf.read(str(read_src), always_2d=True)
             if progress_cb: progress_cb(0.15)
 
             if denoise:
@@ -408,25 +425,35 @@ class AudioEngine:
                         axis=1,
                     )
                 except ImportError:
-                    pass   # skip silently if not installed
+                    pass
             if progress_cb: progress_cb(0.75)
 
             if normalize:
                 peak = np.max(np.abs(data))
                 if peak > 1e-6:
-                    data = data / peak * 0.95   # -0.45 dBFS headroom
+                    data = data / peak * 0.95
 
             if progress_cb: progress_cb(0.90)
 
-            # Preserve original format where possible
-            fmt_map = {".flac": "flac", ".wav": "WAV", ".ogg": "ogg"}
-            out_fmt = fmt_map.get(output.suffix.lower(), "WAV")
-            sf.write(str(output), data, sr, format=out_fmt)
-
-            if progress_cb: progress_cb(1.0)
-            return self._ok(output, len(data) / sr)
+            need_encode = output.suffix.lower() not in _PCM_EXTS
+            if need_encode:
+                tmp_out = Path(tempfile.mktemp(suffix=".wav"))
+                sf.write(str(tmp_out), data, sr, format="WAV")
+                result = self.convert(tmp_out, output, output.suffix.lstrip("."))
+                if progress_cb: progress_cb(1.0)
+                return result
+            else:
+                fmt_map = {".flac": "flac", ".wav": "WAV", ".ogg": "ogg"}
+                out_fmt = fmt_map.get(output.suffix.lower(), "WAV")
+                sf.write(str(output), data, sr, format=out_fmt)
+                if progress_cb: progress_cb(1.0)
+                return self._ok(output, len(data) / sr)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
+        finally:
+            for t in (tmp_in, tmp_out):
+                if t:
+                    t.unlink(missing_ok=True)
 
     # ── Voice cleaner (WAV → web-optimised MP3) ────────────────────────────
 
