@@ -263,4 +263,4 @@ class StemsTab(ctk.CTkFrame):
                            {"text": "✗ errore", "text_color": "#f44336"})
             self.after(0, self._status.err, err)
 
-        self.after(0, self._btn_run.configure, {"state": "normal"})
+        self.after(0, lambda: self._btn_run.configure(state="normal"))

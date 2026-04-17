@@ -298,4 +298,4 @@ class EnhanceTab(ctk.CTkFrame):
             self.after(0, self._status.err,
                        f"{ok}/{total} completati · {total-ok} errori — {first_err}")
         self.after(0, self._progress.set, 1.0)
-        self.after(0, self._btn_run.configure, {"state": "normal"})
+        self.after(0, lambda: self._btn_run.configure(state="normal"))

@@ -559,7 +559,7 @@ class MetadataTab(ctk.CTkFrame):
         lines += [f"  ✓  {d}" for d in report["details"]]
         text = "\n".join(lines)
         self.after(0, self._show_analyze_popup, text, report["safe"])
-        self.after(0, self._btn_analyze.configure, {"state": "normal"})
+        self.after(0, lambda: self._btn_analyze.configure(state="normal"))
 
     def _show_analyze_popup(self, text: str, safe: bool) -> None:
         win = ctk.CTkToplevel(self)

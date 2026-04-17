@@ -761,4 +761,4 @@ class EditTab(ctk.CTkFrame):
             for t in (tmp_a, tmp_b):
                 try: t.unlink(missing_ok=True)
                 except Exception: pass
-            self.after(0, self._btn_apply.configure, {"state": "normal"})
+            self.after(0, lambda: self._btn_apply.configure(state="normal"))
