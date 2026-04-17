@@ -70,6 +70,7 @@ class EditTab(ctk.CTkFrame):
         self._info:          AudioInfo | None = None
         self._play_obj                        = None
         self._playing:       bool             = False
+        self._play_gen:      int              = 0
         self._after_id:      str | None       = None
         self._preview_timer: str | None       = None
         self._build()
@@ -534,24 +535,26 @@ class EditTab(ctk.CTkFrame):
         path = self._picker.get_path()
         if not path:
             return
+        self._play_gen += 1
+        gen = self._play_gen
         self._playing = True
         self._play_start_time = time.time()
         self._play_start_ms   = self._wf.get_cursor()
         self._btn_play.configure(state="disabled")
         self._btn_stop.configure(state="normal")
         threading.Thread(
-            target=self._play_worker, args=(path,), daemon=True
+            target=self._play_worker, args=(path, gen), daemon=True
         ).start()
         self._tick_playhead()
 
-    def _play_worker(self, path: Path) -> None:
+    def _play_worker(self, path: Path, gen: int) -> None:
         import wave
         try:
             import simpleaudio as sa
         except ImportError:
             self.after(0, self._status.err,
                        "Riproduzione non disponibile. Installa: pip install simpleaudio")
-            self.after(0, self._stop_playback_ui)
+            self.after(0, lambda: self._stop_playback_ui(gen))
             return
 
         tmp: Path | None = None
@@ -564,7 +567,7 @@ class EditTab(ctk.CTkFrame):
                 if not r.success:
                     self.after(0, self._status.err,
                                f"Errore decodifica: {r.error}")
-                    self.after(0, self._stop_playback_ui)
+                    self.after(0, lambda: self._stop_playback_ui(gen))
                     return
                 wav_path = tmp
 
@@ -587,7 +590,7 @@ class EditTab(ctk.CTkFrame):
             if tmp:
                 try: tmp.unlink(missing_ok=True)
                 except Exception: pass
-            self.after(0, self._stop_playback_ui)
+            self.after(0, lambda: self._stop_playback_ui(gen))
 
     def _tick_playhead(self) -> None:
         if not self._playing or not self._info:
@@ -610,7 +613,9 @@ class EditTab(ctk.CTkFrame):
             pass
         self._stop_playback_ui()
 
-    def _stop_playback_ui(self) -> None:
+    def _stop_playback_ui(self, gen: int = -1) -> None:
+        if gen >= 0 and gen != self._play_gen:
+            return  # stale callback from a superseded worker
         self._playing = False
         if self._after_id:
             try:
@@ -645,11 +650,13 @@ class EditTab(ctk.CTkFrame):
         path = self._picker.get_path()
         if not path or not self._engine._ffmpeg:
             return
+        self._play_gen += 1
+        gen = self._play_gen
         self._status.busy("Anteprima…")
         threading.Thread(target=self._preview_worker,
-                         args=(path,), daemon=True).start()
+                         args=(path, gen), daemon=True).start()
 
-    def _preview_worker(self, path: Path) -> None:
+    def _preview_worker(self, path: Path, gen: int) -> None:
         """Build effects filter via ffmpeg, extract 6-second clip, play it."""
         import wave
         try:
@@ -661,17 +668,13 @@ class EditTab(ctk.CTkFrame):
 
         tmp: Path | None = None
         try:
-            # Start position (cursor) and clip length
-            cur_s   = self._wf.get_cursor() / 1000.0
-            clip_s  = 6.0
+            cur_s  = self._wf.get_cursor() / 1000.0
+            clip_s = 6.0
 
-            # Build ffmpeg audio filter chain
             filters: list[str] = []
-
             gain = self._gain_slider.get()
             if gain != 0:
                 filters.append(f"volume={gain:.1f}dB")
-
             if self._eq_var.get():
                 bass   = self._bass.get()
                 mid    = self._mid.get()
@@ -681,11 +684,9 @@ class EditTab(ctk.CTkFrame):
                 if mid    != 0:
                     filters.append(
                         f"equalizer=f=1000:width_type=o:width=2:g={mid:.1f}")
-
             if self._speed_var.get():
                 spd = self._speed_slider.get()
                 if spd != 1.0:
-                    # atempo supports 0.5–2.0; chain two filters for extremes
                     if spd < 0.5:
                         filters += [f"atempo={spd*2:.3f}", "atempo=0.5"]
                     elif spd > 2.0:
@@ -695,8 +696,7 @@ class EditTab(ctk.CTkFrame):
 
             tmp = Path(tempfile.mktemp(suffix=".wav"))
             cmd = [self._engine._ffmpeg, "-y",
-                   "-ss", str(cur_s),
-                   "-t",  str(clip_s),
+                   "-ss", str(cur_s), "-t", str(clip_s),
                    "-i",  str(path)]
             if filters:
                 cmd += ["-af", ",".join(filters)]
@@ -716,13 +716,27 @@ class EditTab(ctk.CTkFrame):
                 sw         = wf.getsampwidth()
                 audio_data = wf.readframes(wf.getnframes())
 
-            wave_obj = sa.WaveObject(audio_data, n_ch, sw, frame_rate)
-            self._playing = True
-            self._play_start_time = time.time()
-            self._play_start_ms   = self._wf.get_cursor()
-            self.after(0, self._btn_stop.configure, state="normal")
+            # Bail out if the user already triggered a newer preview/play
+            if gen != self._play_gen:
+                return
+
+            wave_obj       = sa.WaveObject(audio_data, n_ch, sw, frame_rate)
+            _t0            = time.time()
+            _start_ms      = int(cur_s * 1000)
             self._play_obj = wave_obj.play()
-            self.after(0, self._tick_playhead)
+
+            # Activate playhead on the main thread AFTER audio has started
+            def _start_ui():
+                if gen != self._play_gen:
+                    return
+                self._playing         = True
+                self._play_start_time = _t0
+                self._play_start_ms   = _start_ms
+                self._btn_stop.configure(state="normal")
+                self._btn_play.configure(state="disabled")
+                self._tick_playhead()
+
+            self.after(0, _start_ui)
             self._play_obj.wait_done()
         except Exception as exc:
             self.after(0, self._status.err, str(exc))
@@ -730,7 +744,7 @@ class EditTab(ctk.CTkFrame):
             if tmp:
                 try: tmp.unlink(missing_ok=True)
                 except Exception: pass
-            self.after(0, self._stop_playback_ui)
+            self.after(0, lambda: self._stop_playback_ui(gen))
             self.after(0, self._status.info, "Pronto")
 
     # ── Split actions (immediate) ─────────────────────────────────────────
