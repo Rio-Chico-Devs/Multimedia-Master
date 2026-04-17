@@ -67,10 +67,11 @@ class EditTab(ctk.CTkFrame):
         super().__init__(parent, **kw)
         self._engine = engine
         self._deps   = deps
-        self._info:      AudioInfo | None = None
-        self._play_obj                    = None
-        self._playing:   bool             = False
-        self._after_id:  str | None       = None
+        self._info:          AudioInfo | None = None
+        self._play_obj                        = None
+        self._playing:       bool             = False
+        self._after_id:      str | None       = None
+        self._preview_timer: str | None       = None
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -291,8 +292,8 @@ class EditTab(ctk.CTkFrame):
         self._gain_lbl.pack(fill="x")
         self._gain_slider = ctk.CTkSlider(
             body, from_=-20, to=20, number_of_steps=40,
-            command=lambda v: self._gain_lbl.configure(
-                text=f"Gain: {v:+.0f} dB"))
+            command=lambda v: (self._gain_lbl.configure(
+                text=f"Gain: {v:+.0f} dB"), self._schedule_preview()))
         self._gain_slider.set(0)
         self._gain_slider.pack(fill="x", pady=(2, 10))
 
@@ -301,8 +302,8 @@ class EditTab(ctk.CTkFrame):
         self._fi_lbl.pack(fill="x")
         self._fi_slider = ctk.CTkSlider(
             body, from_=0, to=10, number_of_steps=100,
-            command=lambda v: self._fi_lbl.configure(
-                text=f"Fade in: {v:.1f} s"))
+            command=lambda v: (self._fi_lbl.configure(
+                text=f"Fade in: {v:.1f} s"), self._schedule_preview()))
         self._fi_slider.set(0)
         self._fi_slider.pack(fill="x", pady=(2, 10))
 
@@ -311,8 +312,8 @@ class EditTab(ctk.CTkFrame):
         self._fo_lbl.pack(fill="x")
         self._fo_slider = ctk.CTkSlider(
             body, from_=0, to=10, number_of_steps=100,
-            command=lambda v: self._fo_lbl.configure(
-                text=f"Fade out: {v:.1f} s"))
+            command=lambda v: (self._fo_lbl.configure(
+                text=f"Fade out: {v:.1f} s"), self._schedule_preview()))
         self._fo_slider.set(0)
         self._fo_slider.pack(fill="x", pady=(2, 0))
 
@@ -353,8 +354,9 @@ class EditTab(ctk.CTkFrame):
             lbl.pack(fill="x")
             slider = ctk.CTkSlider(
                 body, from_=-12, to=12, number_of_steps=24, state=state,
-                command=lambda v, l=lbl, n=label: l.configure(
-                    text=f"{n}: {v:+.0f} dB"))
+                command=lambda v, l=lbl, n=label: (
+                    l.configure(text=f"{n}: {v:+.0f} dB"),
+                    self._schedule_preview()))
             slider.set(0)
             slider.pack(fill="x", pady=(2, 6))
             setattr(self, attr, slider)
@@ -376,8 +378,8 @@ class EditTab(ctk.CTkFrame):
         self._speed_lbl.pack(fill="x")
         self._speed_slider = ctk.CTkSlider(
             body, from_=0.5, to=2.0, number_of_steps=30,
-            command=lambda v: self._speed_lbl.configure(
-                text=f"Velocità: {v:.2f}×"))
+            command=lambda v: (self._speed_lbl.configure(
+                text=f"Velocità: {v:.2f}×"), self._schedule_preview()))
         self._speed_slider.set(1.0)
         self._speed_slider.pack(fill="x", pady=(2, 0))
 
@@ -525,8 +527,10 @@ class EditTab(ctk.CTkFrame):
     # ── Playback ───────────────────────────────────────────────────────────
 
     def _play(self) -> None:
-        if not self._info or self._playing:
+        if not self._info:
             return
+        if self._playing:
+            self._stop()   # riavvia dal cursore corrente
         path = self._picker.get_path()
         if not path:
             return
@@ -617,6 +621,117 @@ class EditTab(ctk.CTkFrame):
         self._btn_play.configure(
             state="normal" if self._info else "disabled")
         self._btn_stop.configure(state="disabled")
+
+    # ── Real-time preview ─────────────────────────────────────────────────
+
+    def _schedule_preview(self) -> None:
+        """Debounce: schedule a preview 500 ms after the last parameter change."""
+        if not self._info:
+            return
+        if self._preview_timer:
+            try:
+                self.after_cancel(self._preview_timer)
+            except Exception:
+                pass
+        self._preview_timer = self.after(500, self._play_preview)
+
+    def _play_preview(self) -> None:
+        """Play a 6-second clip from cursor with current effects applied."""
+        self._preview_timer = None
+        if not self._info:
+            return
+        if self._playing:
+            self._stop()
+        path = self._picker.get_path()
+        if not path or not self._engine._ffmpeg:
+            return
+        self._status.busy("Anteprima…")
+        threading.Thread(target=self._preview_worker,
+                         args=(path,), daemon=True).start()
+
+    def _preview_worker(self, path: Path) -> None:
+        """Build effects filter via ffmpeg, extract 6-second clip, play it."""
+        import wave
+        try:
+            import simpleaudio as sa
+        except ImportError:
+            self.after(0, self._status.info,
+                       "Installa simpleaudio per l'anteprima: pip install simpleaudio")
+            return
+
+        tmp: Path | None = None
+        try:
+            # Start position (cursor) and clip length
+            cur_s   = self._wf.get_cursor() / 1000.0
+            clip_s  = 6.0
+
+            # Build ffmpeg audio filter chain
+            filters: list[str] = []
+
+            gain = self._gain_slider.get()
+            if gain != 0:
+                filters.append(f"volume={gain:.1f}dB")
+
+            if self._eq_var.get():
+                bass   = self._bass.get()
+                mid    = self._mid.get()
+                treble = self._treble.get()
+                if bass   != 0: filters.append(f"bass=g={bass:.1f}")
+                if treble != 0: filters.append(f"treble=g={treble:.1f}")
+                if mid    != 0:
+                    filters.append(
+                        f"equalizer=f=1000:width_type=o:width=2:g={mid:.1f}")
+
+            if self._speed_var.get():
+                spd = self._speed_slider.get()
+                if spd != 1.0:
+                    # atempo supports 0.5–2.0; chain two filters for extremes
+                    if spd < 0.5:
+                        filters += [f"atempo={spd*2:.3f}", "atempo=0.5"]
+                    elif spd > 2.0:
+                        filters += [f"atempo={spd/2:.3f}", "atempo=2.0"]
+                    else:
+                        filters.append(f"atempo={spd:.3f}")
+
+            tmp = Path(tempfile.mktemp(suffix=".wav"))
+            cmd = [self._engine._ffmpeg, "-y",
+                   "-ss", str(cur_s),
+                   "-t",  str(clip_s),
+                   "-i",  str(path)]
+            if filters:
+                cmd += ["-af", ",".join(filters)]
+            cmd += ["-ar", "44100", str(tmp)]
+
+            import subprocess
+            subprocess.run(cmd,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+            if not tmp.exists() or tmp.stat().st_size == 0:
+                self.after(0, self._status.err, "Anteprima fallita.")
+                return
+
+            with wave.open(str(tmp)) as wf:
+                frame_rate = wf.getframerate()
+                n_ch       = wf.getnchannels()
+                sw         = wf.getsampwidth()
+                audio_data = wf.readframes(wf.getnframes())
+
+            wave_obj = sa.WaveObject(audio_data, n_ch, sw, frame_rate)
+            self._playing = True
+            self._play_start_time = time.time()
+            self._play_start_ms   = self._wf.get_cursor()
+            self.after(0, self._btn_stop.configure, state="normal")
+            self._play_obj = wave_obj.play()
+            self.after(0, self._tick_playhead)
+            self._play_obj.wait_done()
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
+        finally:
+            if tmp:
+                try: tmp.unlink(missing_ok=True)
+                except Exception: pass
+            self.after(0, self._stop_playback_ui)
+            self.after(0, self._status.info, "Pronto")
 
     # ── Split actions (immediate) ─────────────────────────────────────────
 
