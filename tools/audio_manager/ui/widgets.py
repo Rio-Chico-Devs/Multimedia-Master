@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageTk
 _WF_BG       = "#141414"
 _WF_WAVE     = "#1f6aa5"
 _WF_WAVE_LIT = "#4fa8e0"   # brighter inside selection
-_WF_SHADE    = "#00000077" # dim outside trim region
+_WF_SHADE    = "#000000"   # dim outside trim region (paired with stipple="gray50")
 _WF_MARKER_S = "#4caf50"   # start marker (green)
 _WF_MARKER_E = "#f44336"   # end   marker (red)
 _WF_CENTER   = "#2a2a2a"   # centre-line colour
@@ -158,13 +158,15 @@ class WaveformCanvas(tk.Canvas):
         cx  = int(self._cursor_ms / self._duration_ms * w)
         r   = self.HANDLE_R
 
-        # Shade outside selection
+        # Shade outside selection (stipple fakes transparency — Tk has no alpha)
         if sx > 0:
             self.create_rectangle(0, 0, sx, h,
-                                  fill=_WF_SHADE, outline="", tags="overlay")
+                                  fill=_WF_SHADE, outline="",
+                                  stipple="gray50", tags="overlay")
         if ex < w:
             self.create_rectangle(ex, 0, w, h,
-                                  fill=_WF_SHADE, outline="", tags="overlay")
+                                  fill=_WF_SHADE, outline="",
+                                  stipple="gray50", tags="overlay")
 
         # Marker lines
         self.create_line(sx, 0, sx, h, fill=_WF_MARKER_S, width=2, tags="overlay")
