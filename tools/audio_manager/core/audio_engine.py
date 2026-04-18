@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,17 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
+
+
+# ── Safe tempfile helper ─────────────────────────────────────────────────────
+# `tempfile.mktemp()` is deprecated (race condition + symlink attack surface).
+# `mkstemp` atomically creates the file with 0600 permissions; we close the fd
+# and return the Path. Callers are responsible for `unlink(missing_ok=True)`.
+
+def safe_tempfile(suffix: str = "") -> Path:
+    fd, name = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    return Path(name)
 
 # ── ID3 frame → (display_name, category) ─────────────────────────────────────
 # category: standard | technical | history | hidden | custom | art | info
@@ -339,6 +351,7 @@ class AudioEngine:
         if not self._ffmpeg:
             return AudioResult(output=output, success=False,
                                error="ffmpeg non trovato. Installalo e aggiungilo al PATH.")
+        proc: subprocess.Popen | None = None
         try:
             cmd = [self._ffmpeg, "-y", "-i", str(video), "-vn"]
             if sample_rate:
@@ -378,6 +391,14 @@ class AudioEngine:
             return self._ok(output, duration_s)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
+        finally:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
 
     # ── Enhance (noise reduction + normalize) ─────────────────────────────
 
@@ -404,7 +425,7 @@ class AudioEngine:
                 if not self._ffmpeg:
                     return AudioResult(output=output, success=False,
                                        error="ffmpeg necessario per elaborare MP3/AAC")
-                tmp_in = Path(tempfile.mktemp(suffix=".wav"))
+                tmp_in = safe_tempfile(suffix=".wav")
                 r = self.convert(src, tmp_in, "wav")
                 if not r.success:
                     return r
@@ -437,7 +458,7 @@ class AudioEngine:
 
             need_encode = output.suffix.lower() not in _PCM_EXTS
             if need_encode:
-                tmp_out = Path(tempfile.mktemp(suffix=".wav"))
+                tmp_out = safe_tempfile(suffix=".wav")
                 sf.write(str(tmp_out), data, sr, format="WAV")
                 result = self.convert(tmp_out, output, output.suffix.lstrip("."))
                 if progress_cb: progress_cb(1.0)
@@ -602,7 +623,7 @@ class AudioEngine:
                 if not self._ffmpeg:
                     return AudioResult(output=output, success=False,
                                        error="ffmpeg necessario per la EQ su MP3/AAC")
-                tmp_in = Path(tempfile.mktemp(suffix=".wav"))
+                tmp_in = safe_tempfile(suffix=".wav")
                 r = self.convert(src, tmp_in, "wav")
                 if not r.success:
                     return r
@@ -639,7 +660,7 @@ class AudioEngine:
             # If output must be a non-PCM format, write WAV first then convert
             need_encode = output.suffix.lower() not in _PCM_EXTS
             if need_encode:
-                tmp_out = Path(tempfile.mktemp(suffix=".wav"))
+                tmp_out = safe_tempfile(suffix=".wav")
                 sf.write(str(tmp_out), eq_data, sr, format="WAV")
                 return self.convert(tmp_out, output, output.suffix.lstrip("."))
             else:
@@ -758,12 +779,14 @@ class AudioEngine:
                 # soundfile can't read MP3/AAC — decode to a temp WAV via ffmpeg
                 if not self._ffmpeg:
                     return [0.0] * num_samples, [0.0] * num_samples
-                tmp = Path(tempfile.mktemp(suffix=".wav"))
-                subprocess.run(
+                tmp = safe_tempfile(suffix=".wav")
+                proc = subprocess.run(
                     [self._ffmpeg, "-y", "-i", str(path), str(tmp)],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                     encoding="utf-8", errors="replace",
                 )
+                if proc.returncode != 0 or tmp.stat().st_size == 0:
+                    return [0.0] * num_samples, [0.0] * num_samples
                 data, _ = sf.read(str(tmp), always_2d=False)
 
             if data.ndim > 1:
@@ -794,6 +817,7 @@ class AudioEngine:
         Separate a track into stems using demucs (external process).
         Outputs to output_dir/<model>/<track_name>/{vocals,drums,bass,other}.wav
         """
+        proc: subprocess.Popen | None = None
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             cmd = [
@@ -828,6 +852,15 @@ class AudioEngine:
             return results
         except Exception as exc:
             return [AudioResult(output=None, success=False, error=str(exc))]
+        finally:
+            # Ensure demucs doesn't linger as an orphan on exception/cancel
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
 
     # ── Metadata / Tags ───────────────────────────────────────────────────
 
@@ -1647,7 +1680,7 @@ class AudioEngine:
         FLAC STREAMINFO encoder field, OGG vendor string) cannot be removed
         without re-encoding, which would degrade quality in lossy formats.
         """
-        tmp = Path(tempfile.mktemp(suffix=path.suffix))
+        tmp = safe_tempfile(suffix=path.suffix)
         try:
             if self._ffmpeg:
                 res = subprocess.run(

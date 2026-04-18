@@ -297,7 +297,7 @@ class EditTab(ctk.CTkFrame):
         except Exception as exc:
             self.after(0, self._status.err, str(exc))
         finally:
-            self.after(0, self._btn_save.configure, {"state": "normal"})
+            self.after(0, lambda: self._btn_save.configure(state="normal"))
 
     # ── Helpers ────────────────────────────────────────────────────────────
 

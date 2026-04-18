@@ -11,7 +11,6 @@ Features:
 """
 from __future__ import annotations
 
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -19,7 +18,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, StatusBar
-from core.audio_engine import AudioEngine, AudioInfo
+from core.audio_engine import AudioEngine, AudioInfo, safe_tempfile
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS, AUDIO_FORMATS
 from .widgets import MediaFilePicker, WaveformCanvas
@@ -562,7 +561,7 @@ class EditTab(ctk.CTkFrame):
             if path.suffix.lower() == ".wav":
                 wav_path = path
             else:
-                tmp = Path(tempfile.mktemp(suffix=".wav"))
+                tmp = safe_tempfile(suffix=".wav")
                 r = self._engine.convert(path, tmp, "wav")
                 if not r.success:
                     self.after(0, self._status.err,
@@ -694,7 +693,7 @@ class EditTab(ctk.CTkFrame):
                     else:
                         filters.append(f"atempo={spd:.3f}")
 
-            tmp = Path(tempfile.mktemp(suffix=".wav"))
+            tmp = safe_tempfile(suffix=".wav")
             cmd = [self._engine._ffmpeg, "-y",
                    "-ss", str(cur_s), "-t", str(clip_s),
                    "-i",  str(path)]
@@ -703,11 +702,15 @@ class EditTab(ctk.CTkFrame):
             cmd += ["-ar", "44100", str(tmp)]
 
             import subprocess
-            subprocess.run(cmd,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-            if not tmp.exists() or tmp.stat().st_size == 0:
-                self.after(0, self._status.err, "Anteprima fallita.")
+            proc = subprocess.run(
+                cmd,
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                encoding="utf-8", errors="replace",
+            )
+            if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+                first_err = (proc.stderr or "").strip().splitlines()[-1:]
+                msg = first_err[0] if first_err else "ffmpeg ha fallito"
+                self.after(0, self._status.err, f"Anteprima: {msg}")
                 return
 
             with wave.open(str(tmp)) as wf:
@@ -819,8 +822,8 @@ class EditTab(ctk.CTkFrame):
 
     def _worker(self, src: Path, output: Path, fmt: str) -> None:
         import shutil
-        tmp_a   = Path(tempfile.mktemp(suffix=src.suffix))
-        tmp_b   = Path(tempfile.mktemp(suffix=src.suffix))
+        tmp_a   = safe_tempfile(suffix=src.suffix)
+        tmp_b   = safe_tempfile(suffix=src.suffix)
         current = src
         use_a   = True
 

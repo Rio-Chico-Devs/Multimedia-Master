@@ -268,27 +268,28 @@ class CleanTab(ctk.CTkFrame):
             if output.resolve() == path.resolve():
                 err_msg = "Il file sorgente è già un MP3 con lo stesso nome."
                 errors.append(f"{path.name}: {err_msg}")
-                self.after(0, lbl.configure,
-                           {"text": "✗", "text_color": "#f44336"})
-                self.after(0, self._progress.set, (i + 1) / total)
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✗", text_color="#f44336"))
+                self.after(0, lambda p=(i + 1) / total: self._progress.set(p))
                 continue
 
-            self.after(0, lbl.configure, {"text": "⏳", "text_color": "#aaa"})
+            self.after(0, lambda l=lbl: l.configure(
+                text="⏳", text_color="#aaa"))
             result = self._engine.clean_voice(
                 src=path, output=output,
                 preset=preset, mp3_q=mp3_q, to_mono=to_mono,
             )
             if result.success:
                 ok += 1
-                self.after(0, lbl.configure,
-                           {"text": "✓", "text_color": "#4caf50"})
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✓", text_color="#4caf50"))
             else:
                 err_msg = result.error or "Errore sconosciuto"
                 errors.append(f"{path.name}: {err_msg}")
                 print(f"[ERRORE] {path.name}\n{err_msg}\n", file=sys.stderr)
-                self.after(0, lbl.configure,
-                           {"text": "✗", "text_color": "#f44336"})
-            self.after(0, self._progress.set, (i + 1) / total)
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✗", text_color="#f44336"))
+            self.after(0, lambda p=(i + 1) / total: self._progress.set(p))
             self.after(0, self._status.busy,
                        f"In corso ({i+1}/{total})…")
 
