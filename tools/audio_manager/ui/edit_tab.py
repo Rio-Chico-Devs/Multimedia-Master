@@ -530,15 +530,21 @@ class EditTab(ctk.CTkFrame):
         if not self._info:
             return
         if self._playing:
-            self._stop()   # riavvia dal cursore corrente
+            self._stop()
         path = self._picker.get_path()
         if not path:
             return
+        # If cursor is at (or near) the end, restart from the beginning
+        dur_ms   = int(self._info.duration_s * 1000)
+        start_ms = self._wf.get_cursor()
+        if start_ms >= dur_ms - 200:
+            start_ms = 0
+            self._seek_cursor(0)
         self._play_gen += 1
         gen = self._play_gen
         self._playing = True
         self._play_start_time = time.time()
-        self._play_start_ms   = self._wf.get_cursor()
+        self._play_start_ms   = start_ms
         self._btn_play.configure(state="disabled")
         self._btn_stop.configure(state="normal")
         threading.Thread(
@@ -547,7 +553,7 @@ class EditTab(ctk.CTkFrame):
         self._tick_playhead()
 
     def _play_worker(self, path: Path, gen: int) -> None:
-        import wave
+        import wave, subprocess as sp
         try:
             import simpleaudio as sa
         except ImportError:
@@ -558,27 +564,31 @@ class EditTab(ctk.CTkFrame):
 
         tmp: Path | None = None
         try:
-            if path.suffix.lower() == ".wav":
-                wav_path = path
-            else:
-                tmp = safe_tempfile(suffix=".wav")
-                r = self._engine.convert(path, tmp, "wav")
-                if not r.success:
-                    self.after(0, self._status.err,
-                               f"Errore decodifica: {r.error}")
-                    self.after(0, lambda: self._stop_playback_ui(gen))
-                    return
-                wav_path = tmp
+            # Always decode to signed-16-bit PCM WAV: simpleaudio on Windows
+            # crashes on 24-bit or 32-bit float files without raising.
+            tmp = safe_tempfile(suffix=".wav")
+            proc = sp.run(
+                [self._engine._ffmpeg, "-y", "-i", str(path),
+                 "-acodec", "pcm_s16le", str(tmp)],
+                stdout=sp.DEVNULL, stderr=sp.PIPE,
+                encoding="utf-8", errors="replace",
+            )
+            if proc.returncode != 0 or tmp.stat().st_size == 0:
+                err = (proc.stderr or "").strip().splitlines()
+                self.after(0, self._status.err,
+                           f"Decodifica: {err[-1] if err else 'ffmpeg error'}")
+                self.after(0, lambda: self._stop_playback_ui(gen))
+                return
 
-            with wave.open(str(wav_path)) as wf:
-                frame_rate = wf.getframerate()
-                n_ch       = wf.getnchannels()
-                sw         = wf.getsampwidth()
-                n_frames   = wf.getnframes()
+            with wave.open(str(tmp)) as wf:
+                frame_rate  = wf.getframerate()
+                n_ch        = wf.getnchannels()
+                sw          = wf.getsampwidth()
+                n_frames    = wf.getnframes()
                 start_frame = int(self._play_start_ms / 1000 * frame_rate)
                 start_frame = min(start_frame, max(n_frames - 1, 0))
                 wf.setpos(start_frame)
-                audio_data = wf.readframes(n_frames - start_frame)
+                audio_data  = wf.readframes(n_frames - start_frame)
 
             wave_obj = sa.WaveObject(audio_data, n_ch, sw, frame_rate)
             self._play_obj = wave_obj.play()
@@ -699,7 +709,7 @@ class EditTab(ctk.CTkFrame):
                    "-i",  str(path)]
             if filters:
                 cmd += ["-af", ",".join(filters)]
-            cmd += ["-ar", "44100", str(tmp)]
+            cmd += ["-ar", "44100", "-acodec", "pcm_s16le", str(tmp)]
 
             import subprocess
             proc = subprocess.run(
