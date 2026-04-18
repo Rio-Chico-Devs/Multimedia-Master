@@ -75,7 +75,6 @@ class EditTab(ctk.CTkFrame):
         self._play_start_ms:    int              = 0
         self._after_id:         str | None       = None
         self._preview_timer:    str | None       = None
-        self._install_thread_excepthook()
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -639,31 +638,6 @@ class EditTab(ctk.CTkFrame):
         self._btn_play.configure(
             state="normal" if self._info else "disabled")
         self._btn_stop.configure(state="disabled")
-
-    # ── Thread safety ─────────────────────────────────────────────────────
-
-    def _install_thread_excepthook(self) -> None:
-        """Route unhandled thread exceptions to the status bar instead of crashing."""
-        import threading as _th
-        _widget_ref = self
-
-        def _hook(args: _th.ExceptHookArgs) -> None:
-            import traceback
-            msg = "".join(traceback.format_exception(
-                args.exc_type, args.exc_value, args.exc_traceback))
-            print(f"[THREAD ERROR]\n{msg}", file=sys.stderr)
-            try:
-                _widget_ref.after(0, _widget_ref._status.err,
-                                  f"Errore interno: {args.exc_value}")
-                _widget_ref.after(0, lambda: _widget_ref._btn_play.configure(
-                    state="normal" if _widget_ref._info else "disabled"))
-                _widget_ref.after(0, lambda: _widget_ref._btn_stop.configure(
-                    state="disabled"))
-                _widget_ref._playing = False
-            except Exception:
-                pass
-
-        _th.excepthook = _hook
 
     # ── Real-time preview ─────────────────────────────────────────────────
 
