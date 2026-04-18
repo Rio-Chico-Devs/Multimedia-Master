@@ -11,6 +11,7 @@ Features:
 """
 from __future__ import annotations
 
+import sys
 import threading
 import time
 from pathlib import Path
@@ -66,12 +67,15 @@ class EditTab(ctk.CTkFrame):
         super().__init__(parent, **kw)
         self._engine = engine
         self._deps   = deps
-        self._info:          AudioInfo | None = None
-        self._play_obj                        = None
-        self._playing:       bool             = False
-        self._play_gen:      int              = 0
-        self._after_id:      str | None       = None
-        self._preview_timer: str | None       = None
+        self._info:             AudioInfo | None = None
+        self._play_obj                           = None
+        self._playing:          bool             = False
+        self._play_gen:         int              = 0
+        self._play_start_time:  float            = 0.0
+        self._play_start_ms:    int              = 0
+        self._after_id:         str | None       = None
+        self._preview_timer:    str | None       = None
+        self._install_thread_excepthook()
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -636,10 +640,34 @@ class EditTab(ctk.CTkFrame):
             state="normal" if self._info else "disabled")
         self._btn_stop.configure(state="disabled")
 
+    # ── Thread safety ─────────────────────────────────────────────────────
+
+    def _install_thread_excepthook(self) -> None:
+        """Route unhandled thread exceptions to the status bar instead of crashing."""
+        import threading as _th
+        _widget_ref = self
+
+        def _hook(args: _th.ExceptHookArgs) -> None:
+            import traceback
+            msg = "".join(traceback.format_exception(
+                args.exc_type, args.exc_value, args.exc_traceback))
+            print(f"[THREAD ERROR]\n{msg}", file=sys.stderr)
+            try:
+                _widget_ref.after(0, _widget_ref._status.err,
+                                  f"Errore interno: {args.exc_value}")
+                _widget_ref.after(0, lambda: _widget_ref._btn_play.configure(
+                    state="normal" if _widget_ref._info else "disabled"))
+                _widget_ref.after(0, lambda: _widget_ref._btn_stop.configure(
+                    state="disabled"))
+                _widget_ref._playing = False
+            except Exception:
+                pass
+
+        _th.excepthook = _hook
+
     # ── Real-time preview ─────────────────────────────────────────────────
 
     def _schedule_preview(self) -> None:
-        """Debounce: schedule a preview 500 ms after the last parameter change."""
         if not self._info:
             return
         if self._preview_timer:
@@ -650,7 +678,7 @@ class EditTab(ctk.CTkFrame):
         self._preview_timer = self.after(500, self._play_preview)
 
     def _play_preview(self) -> None:
-        """Play a 6-second clip from cursor with current effects applied."""
+        """Snapshot all UI values on the main thread, then launch worker."""
         self._preview_timer = None
         if not self._info:
             return
@@ -659,42 +687,59 @@ class EditTab(ctk.CTkFrame):
         path = self._picker.get_path()
         if not path or not self._engine._ffmpeg:
             return
+
+        # ── Capture every slider/var HERE on the main thread ──────────────
+        # Calling tkinter widget methods from a background thread crashes the
+        # Tcl/Tk interpreter on Windows without raising a Python exception.
+        try:
+            params = {
+                "cur_ms":          self._wf.get_cursor(),
+                "gain":            self._gain_slider.get(),
+                "eq":              self._eq_var.get(),
+                "bass":            self._bass.get(),
+                "mid":             self._mid.get(),
+                "treble":          self._treble.get(),
+                "speed_enabled":   self._speed_var.get(),
+                "speed":           self._speed_slider.get(),
+            }
+        except Exception as exc:
+            self._status.err(f"Lettura parametri: {exc}")
+            return
+
         self._play_gen += 1
         gen = self._play_gen
         self._status.busy("Anteprima…")
         threading.Thread(target=self._preview_worker,
-                         args=(path, gen), daemon=True).start()
+                         args=(path, gen, params), daemon=True).start()
 
-    def _preview_worker(self, path: Path, gen: int) -> None:
-        """Build effects filter via ffmpeg, extract 6-second clip, play it."""
-        import wave
+    def _preview_worker(self, path: Path, gen: int, params: dict) -> None:
+        """Build ffmpeg filter chain from pre-captured params, play 6-second clip."""
+        import wave, subprocess as sp
         try:
             import simpleaudio as sa
         except ImportError:
             self.after(0, self._status.info,
-                       "Installa simpleaudio per l'anteprima: pip install simpleaudio")
+                       "pip install simpleaudio  — richiesto per l'anteprima")
             return
 
         tmp: Path | None = None
         try:
-            cur_s  = self._wf.get_cursor() / 1000.0
+            cur_s  = params["cur_ms"] / 1000.0
             clip_s = 6.0
 
             filters: list[str] = []
-            gain = self._gain_slider.get()
+            gain = params["gain"]
             if gain != 0:
                 filters.append(f"volume={gain:.1f}dB")
-            if self._eq_var.get():
-                bass   = self._bass.get()
-                mid    = self._mid.get()
-                treble = self._treble.get()
+            if params["eq"]:
+                bass, mid, treble = params["bass"], params["mid"], params["treble"]
                 if bass   != 0: filters.append(f"bass=g={bass:.1f}")
                 if treble != 0: filters.append(f"treble=g={treble:.1f}")
                 if mid    != 0:
                     filters.append(
                         f"equalizer=f=1000:width_type=o:width=2:g={mid:.1f}")
-            if self._speed_var.get():
-                spd = self._speed_slider.get()
+            if params["speed_enabled"]:
+                spd = params["speed"]
                 if spd != 1.0:
                     if spd < 0.5:
                         filters += [f"atempo={spd*2:.3f}", "atempo=0.5"]
@@ -711,15 +756,12 @@ class EditTab(ctk.CTkFrame):
                 cmd += ["-af", ",".join(filters)]
             cmd += ["-ar", "44100", "-acodec", "pcm_s16le", str(tmp)]
 
-            import subprocess
-            proc = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                encoding="utf-8", errors="replace",
-            )
+            proc = sp.run(cmd,
+                          stdout=sp.DEVNULL, stderr=sp.PIPE,
+                          encoding="utf-8", errors="replace")
             if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
-                first_err = (proc.stderr or "").strip().splitlines()[-1:]
-                msg = first_err[0] if first_err else "ffmpeg ha fallito"
+                lines = (proc.stderr or "").strip().splitlines()
+                msg   = lines[-1] if lines else "ffmpeg ha fallito"
                 self.after(0, self._status.err, f"Anteprima: {msg}")
                 return
 
@@ -729,16 +771,14 @@ class EditTab(ctk.CTkFrame):
                 sw         = wf.getsampwidth()
                 audio_data = wf.readframes(wf.getnframes())
 
-            # Bail out if the user already triggered a newer preview/play
             if gen != self._play_gen:
                 return
 
             wave_obj       = sa.WaveObject(audio_data, n_ch, sw, frame_rate)
             _t0            = time.time()
-            _start_ms      = int(cur_s * 1000)
+            _start_ms      = params["cur_ms"]
             self._play_obj = wave_obj.play()
 
-            # Activate playhead on the main thread AFTER audio has started
             def _start_ui():
                 if gen != self._play_gen:
                     return
@@ -752,7 +792,7 @@ class EditTab(ctk.CTkFrame):
             self.after(0, _start_ui)
             self._play_obj.wait_done()
         except Exception as exc:
-            self.after(0, self._status.err, str(exc))
+            self.after(0, self._status.err, f"Anteprima: {exc}")
         finally:
             if tmp:
                 try: tmp.unlink(missing_ok=True)
