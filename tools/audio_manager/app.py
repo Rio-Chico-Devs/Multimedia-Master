@@ -69,6 +69,10 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Shared imports (common/)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Wire up shared logger so edit_tab and other modules can log checkpoints
+from core import logger as _logger
+_logger.setup(_LOG)
+
 import customtkinter as ctk
 from ui.audio_window import AudioWindow
 

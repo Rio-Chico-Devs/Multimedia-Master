@@ -528,6 +528,18 @@ class EditTab(ctk.CTkFrame):
         self._cursor_lbl.configure(text=_fmt_time(ms))
 
     # ── Playback ───────────────────────────────────────────────────────────
+    # Uses sounddevice (PortAudio) instead of simpleaudio.
+    # simpleaudio calls WinMM directly and crashes when stop()+play()
+    # happen in rapid succession — e.g. slider move while audio is playing.
+
+    @staticmethod
+    def _sd_stop() -> None:
+        """Stop all sounddevice streams (safe to call even if nothing plays)."""
+        try:
+            import sounddevice as sd
+            sd.stop()
+        except Exception:
+            pass
 
     def _play(self) -> None:
         if not self._info:
@@ -537,10 +549,9 @@ class EditTab(ctk.CTkFrame):
         path = self._picker.get_path()
         if not path:
             return
-        # If cursor is at (or near) the end, restart from the beginning
         dur_ms   = int(self._info.duration_s * 1000)
         start_ms = self._wf.get_cursor()
-        if start_ms >= dur_ms - 200:
+        if start_ms >= dur_ms - 200:   # at (or near) end → restart
             start_ms = 0
             self._seek_cursor(0)
         self._play_gen += 1
@@ -557,25 +568,27 @@ class EditTab(ctk.CTkFrame):
 
     def _play_worker(self, path: Path, gen: int) -> None:
         import wave, subprocess as sp
+        from core import logger
+        tmp: Path | None = None
         try:
-            import simpleaudio as sa
+            import sounddevice as sd
+            import numpy as np
         except ImportError:
             self.after(0, self._status.err,
-                       "Riproduzione non disponibile. Installa: pip install simpleaudio")
+                       "Installa sounddevice: pip install sounddevice")
             self.after(0, lambda: self._stop_playback_ui(gen))
             return
 
-        tmp: Path | None = None
         try:
-            # Always decode to signed-16-bit PCM WAV: simpleaudio on Windows
-            # crashes on 24-bit or 32-bit float files without raising.
+            logger.log("PLAY_WORKER start", str(path))
             tmp = safe_tempfile(suffix=".wav")
             proc = sp.run(
                 [self._engine._ffmpeg, "-y", "-i", str(path),
-                 "-acodec", "pcm_s16le", str(tmp)],
+                 "-acodec", "pcm_s16le", "-ar", "44100", str(tmp)],
                 stdout=sp.DEVNULL, stderr=sp.PIPE,
                 encoding="utf-8", errors="replace",
             )
+            logger.log("PLAY_WORKER ffmpeg done", f"rc={proc.returncode}")
             if proc.returncode != 0 or tmp.stat().st_size == 0:
                 err = (proc.stderr or "").strip().splitlines()
                 self.after(0, self._status.err,
@@ -586,17 +599,22 @@ class EditTab(ctk.CTkFrame):
             with wave.open(str(tmp)) as wf:
                 frame_rate  = wf.getframerate()
                 n_ch        = wf.getnchannels()
-                sw          = wf.getsampwidth()
                 n_frames    = wf.getnframes()
                 start_frame = int(self._play_start_ms / 1000 * frame_rate)
                 start_frame = min(start_frame, max(n_frames - 1, 0))
                 wf.setpos(start_frame)
-                audio_data  = wf.readframes(n_frames - start_frame)
+                raw = wf.readframes(n_frames - start_frame)
 
-            wave_obj = sa.WaveObject(audio_data, n_ch, sw, frame_rate)
-            self._play_obj = wave_obj.play()
-            self._play_obj.wait_done()
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            if n_ch > 1:
+                audio = audio.reshape(-1, n_ch)
+
+            logger.log("PLAY_WORKER sd.play", f"{n_ch}ch {frame_rate}Hz {len(audio)} frames")
+            sd.play(audio, frame_rate)
+            sd.wait()
+            logger.log("PLAY_WORKER sd.wait done")
         except Exception as exc:
+            logger.log("PLAY_WORKER exception", str(exc))
             self.after(0, self._status.err, str(exc))
         finally:
             if tmp:
@@ -618,16 +636,12 @@ class EditTab(ctk.CTkFrame):
         self._after_id = self.after(50, self._tick_playhead)
 
     def _stop(self) -> None:
-        try:
-            if self._play_obj:
-                self._play_obj.stop()
-        except Exception:
-            pass
+        self._sd_stop()
         self._stop_playback_ui()
 
     def _stop_playback_ui(self, gen: int = -1) -> None:
         if gen >= 0 and gen != self._play_gen:
-            return  # stale callback from a superseded worker
+            return
         self._playing = False
         if self._after_id:
             try:
@@ -689,11 +703,13 @@ class EditTab(ctk.CTkFrame):
     def _preview_worker(self, path: Path, gen: int, params: dict) -> None:
         """Build ffmpeg filter chain from pre-captured params, play 6-second clip."""
         import wave, subprocess as sp
+        from core import logger
         try:
-            import simpleaudio as sa
+            import sounddevice as sd
+            import numpy as np
         except ImportError:
             self.after(0, self._status.info,
-                       "pip install simpleaudio  — richiesto per l'anteprima")
+                       "pip install sounddevice  — richiesto per l'anteprima")
             return
 
         tmp: Path | None = None
@@ -730,9 +746,12 @@ class EditTab(ctk.CTkFrame):
                 cmd += ["-af", ",".join(filters)]
             cmd += ["-ar", "44100", "-acodec", "pcm_s16le", str(tmp)]
 
-            proc = sp.run(cmd,
-                          stdout=sp.DEVNULL, stderr=sp.PIPE,
+            logger.log("PREVIEW ffmpeg start",
+                       f"filters={filters} cur={cur_s:.1f}s")
+            proc = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE,
                           encoding="utf-8", errors="replace")
+            logger.log("PREVIEW ffmpeg done", f"rc={proc.returncode}")
+
             if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
                 lines = (proc.stderr or "").strip().splitlines()
                 msg   = lines[-1] if lines else "ffmpeg ha fallito"
@@ -742,16 +761,17 @@ class EditTab(ctk.CTkFrame):
             with wave.open(str(tmp)) as wf:
                 frame_rate = wf.getframerate()
                 n_ch       = wf.getnchannels()
-                sw         = wf.getsampwidth()
-                audio_data = wf.readframes(wf.getnframes())
+                raw        = wf.readframes(wf.getnframes())
 
             if gen != self._play_gen:
                 return
 
-            wave_obj       = sa.WaveObject(audio_data, n_ch, sw, frame_rate)
-            _t0            = time.time()
-            _start_ms      = params["cur_ms"]
-            self._play_obj = wave_obj.play()
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            if n_ch > 1:
+                audio = audio.reshape(-1, n_ch)
+
+            _t0       = time.time()
+            _start_ms = params["cur_ms"]
 
             def _start_ui():
                 if gen != self._play_gen:
@@ -763,9 +783,14 @@ class EditTab(ctk.CTkFrame):
                 self._btn_play.configure(state="disabled")
                 self._tick_playhead()
 
+            logger.log("PREVIEW sd.play",
+                       f"{n_ch}ch {frame_rate}Hz {len(audio)} frames")
             self.after(0, _start_ui)
-            self._play_obj.wait_done()
+            sd.play(audio, frame_rate)
+            sd.wait()
+            logger.log("PREVIEW sd.wait done")
         except Exception as exc:
+            logger.log("PREVIEW exception", str(exc))
             self.after(0, self._status.err, f"Anteprima: {exc}")
         finally:
             if tmp:
