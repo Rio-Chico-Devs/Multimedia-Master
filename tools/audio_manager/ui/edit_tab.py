@@ -75,13 +75,14 @@ class EditTab(ctk.CTkFrame):
         self._play_start_ms:    int              = 0
         self._after_id:         str | None       = None
         self._preview_timer:    str | None       = None
+        self._previewing:       bool             = False
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)
+        self.grid_rowconfigure(4, weight=1)
 
         # Row 0 — file picker
         self._picker = MediaFilePicker(
@@ -150,10 +151,44 @@ class EditTab(ctk.CTkFrame):
             font=ctk.CTkFont(size=10), text_color="#666", anchor="e")
         self._dur_lbl.grid(row=0, column=6, sticky="e", padx=(0, 12))
 
-        # Row 3 — scrollable sections
+        # Row 3 — preview bar
+        pv = ctk.CTkFrame(self, fg_color=("#0e1a2a", "#0e1a2a"), corner_radius=8)
+        pv.grid(row=3, column=0, sticky="ew", padx=12, pady=(6, 0))
+        for i in range(4):
+            pv.grid_columnconfigure(i, weight=0)
+        pv.grid_columnconfigure(4, weight=1)
+
+        ctk.CTkLabel(
+            pv, text="🎧  Anteprima effetti",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#6ab0e0",
+        ).grid(row=0, column=0, padx=(12, 8), pady=6)
+
+        self._btn_preview = ctk.CTkButton(
+            pv, text="▶ Genera", width=90, height=28, state="disabled",
+            command=self._play_preview)
+        self._btn_preview.grid(row=0, column=1, padx=4, pady=6)
+
+        self._btn_stop_preview = ctk.CTkButton(
+            pv, text="■ Stop", width=80, height=28, state="disabled",
+            fg_color="#2a2a2a", hover_color="#3a3a3a",
+            command=self._stop_preview)
+        self._btn_stop_preview.grid(row=0, column=2, padx=4, pady=6)
+
+        ctk.CTkLabel(
+            pv, text="clip 6 s dalla posizione del cursore",
+            text_color="#445", font=ctk.CTkFont(size=10),
+        ).grid(row=0, column=3, padx=(8, 0), pady=6)
+
+        self._preview_status_lbl = ctk.CTkLabel(
+            pv, text="—", text_color="#555",
+            font=ctk.CTkFont(size=10), anchor="e")
+        self._preview_status_lbl.grid(row=0, column=4, sticky="e", padx=(0, 12))
+
+        # Row 4 — scrollable sections
         self._sf = ctk.CTkScrollableFrame(
             self, fg_color=("#0a0a0a", "#0a0a0a"), corner_radius=10)
-        self._sf.grid(row=3, column=0, sticky="nsew", padx=12, pady=(8, 0))
+        self._sf.grid(row=4, column=0, sticky="nsew", padx=12, pady=(8, 0))
         self._sf.grid_columnconfigure(0, weight=1)
 
         self._build_selection_section()
@@ -163,9 +198,9 @@ class EditTab(ctk.CTkFrame):
         self._build_speed_section()
         self._build_output_section()
 
-        # Row 4 — bottom bar
+        # Row 5 — bottom bar
         bot = ctk.CTkFrame(self, fg_color="transparent")
-        bot.grid(row=4, column=0, sticky="ew", padx=12, pady=(6, 0))
+        bot.grid(row=5, column=0, sticky="ew", padx=12, pady=(6, 0))
         bot.grid_columnconfigure(0, weight=1)
         self._status = StatusBar(bot)
         self._status.grid(row=0, column=0, sticky="ew")
@@ -295,8 +330,7 @@ class EditTab(ctk.CTkFrame):
         self._gain_lbl.pack(fill="x")
         self._gain_slider = ctk.CTkSlider(
             body, from_=-20, to=20, number_of_steps=40,
-            command=lambda v: (self._gain_lbl.configure(
-                text=f"Gain: {v:+.0f} dB"), self._schedule_preview()))
+            command=lambda v: self._gain_lbl.configure(text=f"Gain: {v:+.0f} dB"))
         self._gain_slider.set(0)
         self._gain_slider.pack(fill="x", pady=(2, 10))
 
@@ -305,8 +339,7 @@ class EditTab(ctk.CTkFrame):
         self._fi_lbl.pack(fill="x")
         self._fi_slider = ctk.CTkSlider(
             body, from_=0, to=10, number_of_steps=100,
-            command=lambda v: (self._fi_lbl.configure(
-                text=f"Fade in: {v:.1f} s"), self._schedule_preview()))
+            command=lambda v: self._fi_lbl.configure(text=f"Fade in: {v:.1f} s"))
         self._fi_slider.set(0)
         self._fi_slider.pack(fill="x", pady=(2, 10))
 
@@ -315,8 +348,7 @@ class EditTab(ctk.CTkFrame):
         self._fo_lbl.pack(fill="x")
         self._fo_slider = ctk.CTkSlider(
             body, from_=0, to=10, number_of_steps=100,
-            command=lambda v: (self._fo_lbl.configure(
-                text=f"Fade out: {v:.1f} s"), self._schedule_preview()))
+            command=lambda v: self._fo_lbl.configure(text=f"Fade out: {v:.1f} s"))
         self._fo_slider.set(0)
         self._fo_slider.pack(fill="x", pady=(2, 0))
 
@@ -357,9 +389,8 @@ class EditTab(ctk.CTkFrame):
             lbl.pack(fill="x")
             slider = ctk.CTkSlider(
                 body, from_=-12, to=12, number_of_steps=24, state=state,
-                command=lambda v, l=lbl, n=label: (
-                    l.configure(text=f"{n}: {v:+.0f} dB"),
-                    self._schedule_preview()))
+                command=lambda v, l=lbl, n=label: l.configure(
+                    text=f"{n}: {v:+.0f} dB"))
             slider.set(0)
             slider.pack(fill="x", pady=(2, 6))
             setattr(self, attr, slider)
@@ -381,8 +412,8 @@ class EditTab(ctk.CTkFrame):
         self._speed_lbl.pack(fill="x")
         self._speed_slider = ctk.CTkSlider(
             body, from_=0.5, to=2.0, number_of_steps=30,
-            command=lambda v: (self._speed_lbl.configure(
-                text=f"Velocità: {v:.2f}×"), self._schedule_preview()))
+            command=lambda v: self._speed_lbl.configure(
+                text=f"Velocità: {v:.2f}×"))
         self._speed_slider.set(1.0)
         self._speed_slider.pack(fill="x", pady=(2, 0))
 
@@ -430,6 +461,9 @@ class EditTab(ctk.CTkFrame):
             if hasattr(self, "_btn_apply"):
                 self._btn_apply.configure(state="disabled")
                 self._btn_play.configure(state="disabled")
+                self._btn_preview.configure(state="disabled")
+                self._btn_stop_preview.configure(state="disabled")
+                self._preview_status_lbl.configure(text="—", text_color="#555")
             return
 
         self._status.busy("Caricamento forma d'onda…")
@@ -463,6 +497,7 @@ class EditTab(ctk.CTkFrame):
             self._update_sel_duration()
             self._btn_apply.configure(state="normal")
             self._btn_play.configure(state="normal")
+            self._btn_preview.configure(state="normal")
             self._status.info(
                 "Riproduci, seleziona con i marcatori o digita i tempi, "
                 "poi premi 'Applica ed Esporta'")
@@ -544,6 +579,8 @@ class EditTab(ctk.CTkFrame):
     def _play(self) -> None:
         if not self._info:
             return
+        if self._previewing:
+            self._stop_preview()
         if self._playing:
             self._stop()
         path = self._picker.get_path()
@@ -653,42 +690,32 @@ class EditTab(ctk.CTkFrame):
             state="normal" if self._info else "disabled")
         self._btn_stop.configure(state="disabled")
 
-    # ── Real-time preview ─────────────────────────────────────────────────
-
-    def _schedule_preview(self) -> None:
-        if not self._info:
-            return
-        if self._preview_timer:
-            try:
-                self.after_cancel(self._preview_timer)
-            except Exception:
-                pass
-        self._preview_timer = self.after(500, self._play_preview)
+    # ── Preview (manual, dedicated section) ──────────────────────────────
 
     def _play_preview(self) -> None:
-        """Snapshot all UI values on the main thread, then launch worker."""
-        self._preview_timer = None
+        """Capture UI values on main thread, then launch preview worker."""
         if not self._info:
             return
+        if self._previewing:
+            self._stop_preview()
         if self._playing:
             self._stop()
         path = self._picker.get_path()
         if not path or not self._engine._ffmpeg:
             return
 
-        # ── Capture every slider/var HERE on the main thread ──────────────
-        # Calling tkinter widget methods from a background thread crashes the
-        # Tcl/Tk interpreter on Windows without raising a Python exception.
+        # Capture every slider/var HERE on the main thread — calling tkinter
+        # widget methods from a background thread crashes Tcl/Tk on Windows.
         try:
             params = {
-                "cur_ms":          self._wf.get_cursor(),
-                "gain":            self._gain_slider.get(),
-                "eq":              self._eq_var.get(),
-                "bass":            self._bass.get(),
-                "mid":             self._mid.get(),
-                "treble":          self._treble.get(),
-                "speed_enabled":   self._speed_var.get(),
-                "speed":           self._speed_slider.get(),
+                "cur_ms":        self._wf.get_cursor(),
+                "gain":          self._gain_slider.get(),
+                "eq":            self._eq_var.get(),
+                "bass":          self._bass.get(),
+                "mid":           self._mid.get(),
+                "treble":        self._treble.get(),
+                "speed_enabled": self._speed_var.get(),
+                "speed":         self._speed_slider.get(),
             }
         except Exception as exc:
             self._status.err(f"Lettura parametri: {exc}")
@@ -696,9 +723,25 @@ class EditTab(ctk.CTkFrame):
 
         self._play_gen += 1
         gen = self._play_gen
-        self._status.busy("Anteprima…")
+        self._previewing = True
+        self._btn_preview.configure(state="disabled")
+        self._btn_stop_preview.configure(state="normal")
+        self._preview_status_lbl.configure(text="Generazione…", text_color="#aaa")
         threading.Thread(target=self._preview_worker,
                          args=(path, gen, params), daemon=True).start()
+
+    def _stop_preview(self) -> None:
+        self._sd_stop()
+        self._stop_preview_ui()
+
+    def _stop_preview_ui(self, gen: int = -1) -> None:
+        if gen >= 0 and gen != self._play_gen:
+            return
+        self._previewing = False
+        self._btn_preview.configure(
+            state="normal" if self._info else "disabled")
+        self._btn_stop_preview.configure(state="disabled")
+        self._preview_status_lbl.configure(text="—", text_color="#555")
 
     def _preview_worker(self, path: Path, gen: int, params: dict) -> None:
         """Build ffmpeg filter chain from pre-captured params, play 6-second clip."""
@@ -708,8 +751,9 @@ class EditTab(ctk.CTkFrame):
             import sounddevice as sd
             import numpy as np
         except ImportError:
-            self.after(0, self._status.info,
-                       "pip install sounddevice  — richiesto per l'anteprima")
+            self.after(0, lambda: self._preview_status_lbl.configure(
+                text="pip install sounddevice", text_color="#f44336"))
+            self.after(0, lambda: self._stop_preview_ui(gen))
             return
 
         tmp: Path | None = None
@@ -755,7 +799,8 @@ class EditTab(ctk.CTkFrame):
             if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
                 lines = (proc.stderr or "").strip().splitlines()
                 msg   = lines[-1] if lines else "ffmpeg ha fallito"
-                self.after(0, self._status.err, f"Anteprima: {msg}")
+                self.after(0, lambda m=msg: self._preview_status_lbl.configure(
+                    text=f"Errore: {m}", text_color="#f44336"))
                 return
 
             with wave.open(str(tmp)) as wf:
@@ -770,34 +815,23 @@ class EditTab(ctk.CTkFrame):
             if n_ch > 1:
                 audio = audio.reshape(-1, n_ch)
 
-            _t0       = time.time()
-            _start_ms = params["cur_ms"]
-
-            def _start_ui():
-                if gen != self._play_gen:
-                    return
-                self._playing         = True
-                self._play_start_time = _t0
-                self._play_start_ms   = _start_ms
-                self._btn_stop.configure(state="normal")
-                self._btn_play.configure(state="disabled")
-                self._tick_playhead()
+            self.after(0, lambda: self._preview_status_lbl.configure(
+                text="▶ in riproduzione", text_color="#4fa8e0"))
 
             logger.log("PREVIEW sd.play",
                        f"{n_ch}ch {frame_rate}Hz {len(audio)} frames")
-            self.after(0, _start_ui)
             sd.play(audio, frame_rate)
             sd.wait()
             logger.log("PREVIEW sd.wait done")
         except Exception as exc:
             logger.log("PREVIEW exception", str(exc))
-            self.after(0, self._status.err, f"Anteprima: {exc}")
+            self.after(0, lambda e=exc: self._preview_status_lbl.configure(
+                text=f"Errore: {e}", text_color="#f44336"))
         finally:
             if tmp:
                 try: tmp.unlink(missing_ok=True)
                 except Exception: pass
-            self.after(0, lambda: self._stop_playback_ui(gen))
-            self.after(0, self._status.info, "Pronto")
+            self.after(0, lambda: self._stop_preview_ui(gen))
 
     # ── Split actions (immediate) ─────────────────────────────────────────
 
