@@ -289,19 +289,18 @@ class ConvertTab(ctk.CTkFrame):
         for i, (path, _, lbl) in enumerate(self._file_rows):
             out_dir = self._out_dir or path.parent
             output  = out_dir / (path.stem + ext)
-            self.after(0, lbl.configure, {"text": "⏳", "text_color": "#aaa"})
+            self.after(0, lambda l=lbl: l.configure(text="⏳", text_color="#aaa"))
             result = self._engine.convert(path, output, fmt, bitrate, sr, ch)
             if result.success:
                 ok += 1
-                self.after(0, lbl.configure,
-                           {"text": "✓", "text_color": "#4caf50"})
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✓", text_color="#4caf50"))
             else:
                 err_msg = result.error or "Errore sconosciuto"
                 errors.append(f"{path.name}: {err_msg}")
                 print(f"[ERRORE] {path.name}\n{err_msg}\n", file=sys.stderr)
-                self.after(0, lbl.configure,
-                           {"text": "✗", "text_color": "#f44336",
-                            "tooltip_text": err_msg})
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✗", text_color="#f44336"))
             self.after(0, self._progress.set, (i + 1) / total)
             self.after(0, self._status.busy,
                        f"In corso ({i+1}/{total})…")

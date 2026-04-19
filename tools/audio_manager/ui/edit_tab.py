@@ -11,7 +11,7 @@ Features:
 """
 from __future__ import annotations
 
-import tempfile
+import sys
 import threading
 import time
 from pathlib import Path
@@ -19,7 +19,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, StatusBar
-from core.audio_engine import AudioEngine, AudioInfo
+from core.audio_engine import AudioEngine, AudioInfo, safe_tempfile, VOICE_EFFECTS
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS, AUDIO_FORMATS
 from .widgets import MediaFilePicker, WaveformCanvas
@@ -67,17 +67,23 @@ class EditTab(ctk.CTkFrame):
         super().__init__(parent, **kw)
         self._engine = engine
         self._deps   = deps
-        self._info:      AudioInfo | None = None
-        self._play_obj                    = None
-        self._playing:   bool             = False
-        self._after_id:  str | None       = None
+        self._info:             AudioInfo | None = None
+        self._play_obj                           = None
+        self._playing:          bool             = False
+        self._play_gen:         int              = 0
+        self._play_start_time:  float            = 0.0
+        self._play_start_ms:    int              = 0
+        self._after_id:         str | None       = None
+        self._preview_timer:    str | None       = None
+        self._previewing:       bool             = False
+        self._voice_effect_var: ctk.StringVar    = ctk.StringVar(value="none")
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)
+        self.grid_rowconfigure(4, weight=1)
 
         # Row 0 — file picker
         self._picker = MediaFilePicker(
@@ -146,10 +152,44 @@ class EditTab(ctk.CTkFrame):
             font=ctk.CTkFont(size=10), text_color="#666", anchor="e")
         self._dur_lbl.grid(row=0, column=6, sticky="e", padx=(0, 12))
 
-        # Row 3 — scrollable sections
+        # Row 3 — preview bar
+        pv = ctk.CTkFrame(self, fg_color=("#0e1a2a", "#0e1a2a"), corner_radius=8)
+        pv.grid(row=3, column=0, sticky="ew", padx=12, pady=(6, 0))
+        for i in range(4):
+            pv.grid_columnconfigure(i, weight=0)
+        pv.grid_columnconfigure(4, weight=1)
+
+        ctk.CTkLabel(
+            pv, text="🎧  Anteprima effetti",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#6ab0e0",
+        ).grid(row=0, column=0, padx=(12, 8), pady=6)
+
+        self._btn_preview = ctk.CTkButton(
+            pv, text="▶ Genera", width=90, height=28, state="disabled",
+            command=self._play_preview)
+        self._btn_preview.grid(row=0, column=1, padx=4, pady=6)
+
+        self._btn_stop_preview = ctk.CTkButton(
+            pv, text="■ Stop", width=80, height=28, state="disabled",
+            fg_color="#2a2a2a", hover_color="#3a3a3a",
+            command=self._stop_preview)
+        self._btn_stop_preview.grid(row=0, column=2, padx=4, pady=6)
+
+        ctk.CTkLabel(
+            pv, text="clip 6 s dalla posizione del cursore",
+            text_color="#445", font=ctk.CTkFont(size=10),
+        ).grid(row=0, column=3, padx=(8, 0), pady=6)
+
+        self._preview_status_lbl = ctk.CTkLabel(
+            pv, text="—", text_color="#555",
+            font=ctk.CTkFont(size=10), anchor="e")
+        self._preview_status_lbl.grid(row=0, column=4, sticky="e", padx=(0, 12))
+
+        # Row 4 — scrollable sections
         self._sf = ctk.CTkScrollableFrame(
             self, fg_color=("#0a0a0a", "#0a0a0a"), corner_radius=10)
-        self._sf.grid(row=3, column=0, sticky="nsew", padx=12, pady=(8, 0))
+        self._sf.grid(row=4, column=0, sticky="nsew", padx=12, pady=(8, 0))
         self._sf.grid_columnconfigure(0, weight=1)
 
         self._build_selection_section()
@@ -157,11 +197,12 @@ class EditTab(ctk.CTkFrame):
         self._build_volume_section()
         self._build_eq_section()
         self._build_speed_section()
+        self._build_voice_effects_section()
         self._build_output_section()
 
-        # Row 4 — bottom bar
+        # Row 5 — bottom bar
         bot = ctk.CTkFrame(self, fg_color="transparent")
-        bot.grid(row=4, column=0, sticky="ew", padx=12, pady=(6, 0))
+        bot.grid(row=5, column=0, sticky="ew", padx=12, pady=(6, 0))
         bot.grid_columnconfigure(0, weight=1)
         self._status = StatusBar(bot)
         self._status.grid(row=0, column=0, sticky="ew")
@@ -291,8 +332,7 @@ class EditTab(ctk.CTkFrame):
         self._gain_lbl.pack(fill="x")
         self._gain_slider = ctk.CTkSlider(
             body, from_=-20, to=20, number_of_steps=40,
-            command=lambda v: self._gain_lbl.configure(
-                text=f"Gain: {v:+.0f} dB"))
+            command=lambda v: self._gain_lbl.configure(text=f"Gain: {v:+.0f} dB"))
         self._gain_slider.set(0)
         self._gain_slider.pack(fill="x", pady=(2, 10))
 
@@ -301,8 +341,7 @@ class EditTab(ctk.CTkFrame):
         self._fi_lbl.pack(fill="x")
         self._fi_slider = ctk.CTkSlider(
             body, from_=0, to=10, number_of_steps=100,
-            command=lambda v: self._fi_lbl.configure(
-                text=f"Fade in: {v:.1f} s"))
+            command=lambda v: self._fi_lbl.configure(text=f"Fade in: {v:.1f} s"))
         self._fi_slider.set(0)
         self._fi_slider.pack(fill="x", pady=(2, 10))
 
@@ -311,8 +350,7 @@ class EditTab(ctk.CTkFrame):
         self._fo_lbl.pack(fill="x")
         self._fo_slider = ctk.CTkSlider(
             body, from_=0, to=10, number_of_steps=100,
-            command=lambda v: self._fo_lbl.configure(
-                text=f"Fade out: {v:.1f} s"))
+            command=lambda v: self._fo_lbl.configure(text=f"Fade out: {v:.1f} s"))
         self._fo_slider.set(0)
         self._fo_slider.pack(fill="x", pady=(2, 0))
 
@@ -381,14 +419,65 @@ class EditTab(ctk.CTkFrame):
         self._speed_slider.set(1.0)
         self._speed_slider.pack(fill="x", pady=(2, 0))
 
+    # ── Voice effects ──────────────────────────────────────────────────
+
+    def _build_voice_effects_section(self) -> None:
+        card = self._card("🎭  Effetti voce speciali")
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        body.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            body,
+            text="Applicato dopo tutti gli altri effetti. "
+                 "Usa il pulsante Anteprima per testarlo prima di esportare.",
+            text_color="#666", font=ctk.CTkFont(size=10), justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        # Radio buttons in a 4-column grid
+        btn_frame = ctk.CTkFrame(body, fg_color="transparent")
+        btn_frame.pack(fill="x")
+        for col in range(4):
+            btn_frame.grid_columnconfigure(col, weight=1)
+
+        effect_choices = [("none", "❌  Nessuno")] + [
+            (k, v[0].split("  —")[0]) for k, v in VOICE_EFFECTS.items()
+        ]
+        for idx, (key, label) in enumerate(effect_choices):
+            ctk.CTkRadioButton(
+                btn_frame,
+                text=label,
+                variable=self._voice_effect_var,
+                value=key,
+                command=self._on_effect_change,
+                font=ctk.CTkFont(size=11),
+            ).grid(row=idx // 4, column=idx % 4,
+                   sticky="w", padx=6, pady=3)
+
+        self._effect_desc_lbl = ctk.CTkLabel(
+            body, text="",
+            text_color="#888", font=ctk.CTkFont(size=10),
+            wraplength=520, justify="left", anchor="w")
+        self._effect_desc_lbl.pack(fill="x", pady=(8, 0))
+
+    def _on_effect_change(self) -> None:
+        key = self._voice_effect_var.get()
+        if key == "none" or key not in VOICE_EFFECTS:
+            self._effect_desc_lbl.configure(text="")
+        else:
+            desc, _ = VOICE_EFFECTS[key]
+            self._effect_desc_lbl.configure(text=desc)
+
     # ── Output ─────────────────────────────────────────────────────────────
 
     def _build_output_section(self) -> None:
+        self._out_dir: Path | None = None
         card = self._card("💾  Output")
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
         body.grid_columnconfigure(1, weight=1)
 
+        # Format
         ctk.CTkLabel(body, text="Formato:", width=70, anchor="w",
                      font=ctk.CTkFont(size=11)
                      ).grid(row=0, column=0, sticky="w", pady=2)
@@ -397,16 +486,48 @@ class EditTab(ctk.CTkFrame):
             body, variable=self._out_fmt_var,
             values=["Stesso del file"] + list(AUDIO_FORMATS.keys()),
             dynamic_resizing=False,
-        ).grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=2)
+        ).grid(row=0, column=1, columnspan=3, sticky="ew", padx=(4, 0), pady=2)
 
+        # Suffix (empty = same name, overwrites source if same folder)
         ctk.CTkLabel(body, text="Suffisso:", width=70, anchor="w",
                      font=ctk.CTkFont(size=11)
                      ).grid(row=1, column=0, sticky="w", pady=2)
         self._suffix_entry = ctk.CTkEntry(
-            body, placeholder_text="_modificato")
+            body, placeholder_text="vuoto = stesso nome (sovrascrive)")
         self._suffix_entry.insert(0, "_modificato")
-        self._suffix_entry.grid(row=1, column=1, sticky="ew",
+        self._suffix_entry.grid(row=1, column=1, columnspan=3, sticky="ew",
                                 padx=(4, 0), pady=2)
+
+        # Output folder
+        ctk.CTkLabel(body, text="Cartella:", width=70, anchor="w",
+                     font=ctk.CTkFont(size=11)
+                     ).grid(row=2, column=0, sticky="w", pady=(8, 2))
+        self._out_dir_lbl = ctk.CTkLabel(
+            body, text="Stessa del file sorgente",
+            anchor="w", text_color="gray",
+            font=ctk.CTkFont(size=11))
+        self._out_dir_lbl.grid(row=2, column=1, sticky="ew",
+                               padx=(4, 0), pady=(8, 2))
+        ctk.CTkButton(body, text="Sfoglia", width=72, height=28,
+                      command=self._browse_out_dir,
+                      ).grid(row=2, column=2, padx=(8, 0), pady=(8, 2))
+        ctk.CTkButton(body, text="✕", width=30, height=28,
+                      fg_color="#2a2a2a", hover_color="#3a3a3a",
+                      command=self._clear_out_dir,
+                      ).grid(row=2, column=3, padx=(4, 0), pady=(8, 2))
+
+    def _browse_out_dir(self) -> None:
+        from tkinter import filedialog
+        d = filedialog.askdirectory(title="Scegli cartella di output")
+        if d:
+            self._out_dir = Path(d)
+            self._out_dir_lbl.configure(text=str(self._out_dir),
+                                        text_color="white")
+
+    def _clear_out_dir(self) -> None:
+        self._out_dir = None
+        self._out_dir_lbl.configure(text="Stessa del file sorgente",
+                                    text_color="gray")
 
     # ── File loaded ────────────────────────────────────────────────────────
 
@@ -425,6 +546,9 @@ class EditTab(ctk.CTkFrame):
             if hasattr(self, "_btn_apply"):
                 self._btn_apply.configure(state="disabled")
                 self._btn_play.configure(state="disabled")
+                self._btn_preview.configure(state="disabled")
+                self._btn_stop_preview.configure(state="disabled")
+                self._preview_status_lbl.configure(text="—", text_color="#555")
             return
 
         self._status.busy("Caricamento forma d'onda…")
@@ -458,6 +582,7 @@ class EditTab(ctk.CTkFrame):
             self._update_sel_duration()
             self._btn_apply.configure(state="normal")
             self._btn_play.configure(state="normal")
+            self._btn_preview.configure(state="normal")
             self._status.info(
                 "Riproduci, seleziona con i marcatori o digita i tempi, "
                 "poi premi 'Applica ed Esporta'")
@@ -523,67 +648,101 @@ class EditTab(ctk.CTkFrame):
         self._cursor_lbl.configure(text=_fmt_time(ms))
 
     # ── Playback ───────────────────────────────────────────────────────────
+    # Uses sounddevice (PortAudio) instead of simpleaudio.
+    # simpleaudio calls WinMM directly and crashes when stop()+play()
+    # happen in rapid succession — e.g. slider move while audio is playing.
+
+    @staticmethod
+    def _sd_stop() -> None:
+        """Stop all sounddevice streams (safe to call even if nothing plays)."""
+        try:
+            import sounddevice as sd
+            sd.stop()
+        except Exception:
+            pass
 
     def _play(self) -> None:
-        if not self._info or self._playing:
+        if not self._info:
             return
+        if self._previewing:
+            self._stop_preview()
+        if self._playing:
+            self._stop()
         path = self._picker.get_path()
         if not path:
             return
+        dur_ms   = int(self._info.duration_s * 1000)
+        start_ms = self._wf.get_cursor()
+        if start_ms >= dur_ms - 200:   # at (or near) end → restart
+            start_ms = 0
+            self._seek_cursor(0)
+        self._play_gen += 1
+        gen = self._play_gen
         self._playing = True
         self._play_start_time = time.time()
-        self._play_start_ms   = self._wf.get_cursor()
+        self._play_start_ms   = start_ms
         self._btn_play.configure(state="disabled")
         self._btn_stop.configure(state="normal")
         threading.Thread(
-            target=self._play_worker, args=(path,), daemon=True
+            target=self._play_worker, args=(path, gen), daemon=True
         ).start()
         self._tick_playhead()
 
-    def _play_worker(self, path: Path) -> None:
-        import wave
-        try:
-            import simpleaudio as sa
-        except ImportError:
-            self.after(0, self._status.err,
-                       "Riproduzione non disponibile. Installa: pip install simpleaudio")
-            self.after(0, self._stop_playback_ui)
-            return
-
+    def _play_worker(self, path: Path, gen: int) -> None:
+        import wave, subprocess as sp
+        from core import logger
         tmp: Path | None = None
         try:
-            if path.suffix.lower() == ".wav":
-                wav_path = path
-            else:
-                tmp = Path(tempfile.mktemp(suffix=".wav"))
-                r = self._engine.convert(path, tmp, "wav")
-                if not r.success:
-                    self.after(0, self._status.err,
-                               f"Errore decodifica: {r.error}")
-                    self.after(0, self._stop_playback_ui)
-                    return
-                wav_path = tmp
+            import sounddevice as sd
+            import numpy as np
+        except ImportError:
+            self.after(0, self._status.err,
+                       "Installa sounddevice: pip install sounddevice")
+            self.after(0, lambda: self._stop_playback_ui(gen))
+            return
 
-            with wave.open(str(wav_path)) as wf:
-                frame_rate = wf.getframerate()
-                n_ch       = wf.getnchannels()
-                sw         = wf.getsampwidth()
-                n_frames   = wf.getnframes()
+        try:
+            logger.log("PLAY_WORKER start", str(path))
+            tmp = safe_tempfile(suffix=".wav")
+            proc = sp.run(
+                [self._engine._ffmpeg, "-y", "-i", str(path),
+                 "-acodec", "pcm_s16le", "-ar", "44100", str(tmp)],
+                stdout=sp.DEVNULL, stderr=sp.PIPE,
+                encoding="utf-8", errors="replace",
+            )
+            logger.log("PLAY_WORKER ffmpeg done", f"rc={proc.returncode}")
+            if proc.returncode != 0 or tmp.stat().st_size == 0:
+                err = (proc.stderr or "").strip().splitlines()
+                self.after(0, self._status.err,
+                           f"Decodifica: {err[-1] if err else 'ffmpeg error'}")
+                self.after(0, lambda: self._stop_playback_ui(gen))
+                return
+
+            with wave.open(str(tmp)) as wf:
+                frame_rate  = wf.getframerate()
+                n_ch        = wf.getnchannels()
+                n_frames    = wf.getnframes()
                 start_frame = int(self._play_start_ms / 1000 * frame_rate)
                 start_frame = min(start_frame, max(n_frames - 1, 0))
                 wf.setpos(start_frame)
-                audio_data = wf.readframes(n_frames - start_frame)
+                raw = wf.readframes(n_frames - start_frame)
 
-            wave_obj = sa.WaveObject(audio_data, n_ch, sw, frame_rate)
-            self._play_obj = wave_obj.play()
-            self._play_obj.wait_done()
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            if n_ch > 1:
+                audio = audio.reshape(-1, n_ch)
+
+            logger.log("PLAY_WORKER sd.play", f"{n_ch}ch {frame_rate}Hz {len(audio)} frames")
+            sd.play(audio, frame_rate)
+            sd.wait()
+            logger.log("PLAY_WORKER sd.wait done")
         except Exception as exc:
+            logger.log("PLAY_WORKER exception", str(exc))
             self.after(0, self._status.err, str(exc))
         finally:
             if tmp:
                 try: tmp.unlink(missing_ok=True)
                 except Exception: pass
-            self.after(0, self._stop_playback_ui)
+            self.after(0, lambda: self._stop_playback_ui(gen))
 
     def _tick_playhead(self) -> None:
         if not self._playing or not self._info:
@@ -599,14 +758,12 @@ class EditTab(ctk.CTkFrame):
         self._after_id = self.after(50, self._tick_playhead)
 
     def _stop(self) -> None:
-        try:
-            if self._play_obj:
-                self._play_obj.stop()
-        except Exception:
-            pass
+        self._sd_stop()
         self._stop_playback_ui()
 
-    def _stop_playback_ui(self) -> None:
+    def _stop_playback_ui(self, gen: int = -1) -> None:
+        if gen >= 0 and gen != self._play_gen:
+            return
         self._playing = False
         if self._after_id:
             try:
@@ -617,6 +774,149 @@ class EditTab(ctk.CTkFrame):
         self._btn_play.configure(
             state="normal" if self._info else "disabled")
         self._btn_stop.configure(state="disabled")
+
+    # ── Preview (manual, dedicated section) ──────────────────────────────
+
+    def _play_preview(self) -> None:
+        """Capture UI values on main thread, then launch preview worker."""
+        if not self._info:
+            return
+        if self._previewing:
+            self._stop_preview()
+        if self._playing:
+            self._stop()
+        path = self._picker.get_path()
+        if not path or not self._engine._ffmpeg:
+            return
+
+        # Capture every slider/var HERE on the main thread — calling tkinter
+        # widget methods from a background thread crashes Tcl/Tk on Windows.
+        try:
+            params = {
+                "cur_ms":        self._wf.get_cursor(),
+                "gain":          self._gain_slider.get(),
+                "eq":            self._eq_var.get(),
+                "bass":          self._bass.get(),
+                "mid":           self._mid.get(),
+                "treble":        self._treble.get(),
+                "speed_enabled": self._speed_var.get(),
+                "speed":         self._speed_slider.get(),
+            }
+        except Exception as exc:
+            self._status.err(f"Lettura parametri: {exc}")
+            return
+
+        self._play_gen += 1
+        gen = self._play_gen
+        self._previewing = True
+        self._btn_preview.configure(state="disabled")
+        self._btn_stop_preview.configure(state="normal")
+        self._preview_status_lbl.configure(text="Generazione…", text_color="#aaa")
+        threading.Thread(target=self._preview_worker,
+                         args=(path, gen, params), daemon=True).start()
+
+    def _stop_preview(self) -> None:
+        self._sd_stop()
+        self._stop_preview_ui()
+
+    def _stop_preview_ui(self, gen: int = -1) -> None:
+        if gen >= 0 and gen != self._play_gen:
+            return
+        self._previewing = False
+        self._btn_preview.configure(
+            state="normal" if self._info else "disabled")
+        self._btn_stop_preview.configure(state="disabled")
+        self._preview_status_lbl.configure(text="—", text_color="#555")
+
+    def _preview_worker(self, path: Path, gen: int, params: dict) -> None:
+        """Build ffmpeg filter chain from pre-captured params, play 6-second clip."""
+        import wave, subprocess as sp
+        from core import logger
+        try:
+            import sounddevice as sd
+            import numpy as np
+        except ImportError:
+            self.after(0, lambda: self._preview_status_lbl.configure(
+                text="pip install sounddevice", text_color="#f44336"))
+            self.after(0, lambda: self._stop_preview_ui(gen))
+            return
+
+        tmp: Path | None = None
+        try:
+            cur_s  = params["cur_ms"] / 1000.0
+            clip_s = 6.0
+
+            filters: list[str] = []
+            gain = params["gain"]
+            if gain != 0:
+                filters.append(f"volume={gain:.1f}dB")
+            if params["eq"]:
+                bass, mid, treble = params["bass"], params["mid"], params["treble"]
+                if bass   != 0: filters.append(f"bass=g={bass:.1f}")
+                if treble != 0: filters.append(f"treble=g={treble:.1f}")
+                if mid    != 0:
+                    filters.append(
+                        f"equalizer=f=1000:width_type=o:width=2:g={mid:.1f}")
+            if params["speed_enabled"]:
+                spd = params["speed"]
+                if spd != 1.0:
+                    if spd < 0.5:
+                        filters += [f"atempo={spd*2:.3f}", "atempo=0.5"]
+                    elif spd > 2.0:
+                        filters += [f"atempo={spd/2:.3f}", "atempo=2.0"]
+                    else:
+                        filters.append(f"atempo={spd:.3f}")
+
+            tmp = safe_tempfile(suffix=".wav")
+            cmd = [self._engine._ffmpeg, "-y",
+                   "-ss", str(cur_s), "-t", str(clip_s),
+                   "-i",  str(path)]
+            if filters:
+                cmd += ["-af", ",".join(filters)]
+            cmd += ["-ar", "44100", "-acodec", "pcm_s16le", str(tmp)]
+
+            logger.log("PREVIEW ffmpeg start",
+                       f"filters={filters} cur={cur_s:.1f}s")
+            proc = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE,
+                          encoding="utf-8", errors="replace")
+            logger.log("PREVIEW ffmpeg done", f"rc={proc.returncode}")
+
+            if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
+                lines = (proc.stderr or "").strip().splitlines()
+                msg   = lines[-1] if lines else "ffmpeg ha fallito"
+                self.after(0, lambda m=msg: self._preview_status_lbl.configure(
+                    text=f"Errore: {m}", text_color="#f44336"))
+                return
+
+            with wave.open(str(tmp)) as wf:
+                frame_rate = wf.getframerate()
+                n_ch       = wf.getnchannels()
+                raw        = wf.readframes(wf.getnframes())
+
+            if gen != self._play_gen:
+                return
+
+            audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+            if n_ch > 1:
+                audio = audio.reshape(-1, n_ch)
+
+            self.after(0, lambda: self._preview_status_lbl.configure(
+                text="▶ in riproduzione", text_color="#4fa8e0"))
+
+            logger.log("PREVIEW sd.play",
+                       f"{n_ch}ch {frame_rate}Hz {len(audio)} frames")
+            sd.play(audio, frame_rate)
+            sd.wait()
+            logger.log("PREVIEW sd.wait done")
+        except Exception as exc:
+            logger.log("PREVIEW exception", str(exc))
+            self.after(0, lambda e=exc: self._preview_status_lbl.configure(
+                text=f"Errore: {e}", text_color="#f44336"))
+        finally:
+            if tmp:
+                try: tmp.unlink(missing_ok=True)
+                except Exception: pass
+            self.after(0, lambda: self._stop_preview_ui(gen))
 
     # ── Split actions (immediate) ─────────────────────────────────────────
 
@@ -679,19 +979,22 @@ class EditTab(ctk.CTkFrame):
                else AUDIO_FORMATS[fmt_choice].ext)
         fmt = ext.lstrip(".")
 
-        suffix = self._suffix_entry.get().strip() or "_modificato"
-        output = src.parent / (src.stem + suffix + ext)
+        suffix  = self._suffix_entry.get().strip()   # empty = same name
+        out_dir = self._out_dir if self._out_dir else src.parent
+        output  = out_dir / (src.stem + suffix + ext)
 
+        voice_effect = self._voice_effect_var.get()
         self._btn_apply.configure(state="disabled")
         self._status.busy("Applicazione effetti…")
         threading.Thread(
-            target=self._worker, args=(src, output, fmt), daemon=True
+            target=self._worker, args=(src, output, fmt, voice_effect), daemon=True
         ).start()
 
-    def _worker(self, src: Path, output: Path, fmt: str) -> None:
+    def _worker(self, src: Path, output: Path, fmt: str,
+                voice_effect: str = "none") -> None:
         import shutil
-        tmp_a   = Path(tempfile.mktemp(suffix=src.suffix))
-        tmp_b   = Path(tempfile.mktemp(suffix=src.suffix))
+        tmp_a   = safe_tempfile(suffix=src.suffix)
+        tmp_b   = safe_tempfile(suffix=src.suffix)
         current = src
         use_a   = True
 
@@ -740,11 +1043,19 @@ class EditTab(ctk.CTkFrame):
                         c, d, speed=self._speed_slider.get())):
                     return
 
+            if voice_effect != "none":
+                if not step(lambda c, d, ve=voice_effect:
+                            self._engine.apply_voice_effect(c, d, effect=ve)):
+                    return
+
             # Final: to target format
+            # Block only when nothing was processed AND output == source
+            # (processed output is in a temp file so current != src in that case)
             if current == src and output.resolve() == src.resolve():
                 self.after(0, self._status.err,
-                           "Il file di output coincide con il sorgente. "
-                           "Cambia il suffisso.")
+                           "Nessun effetto attivo e il file di output è lo stesso "
+                           "del sorgente. Aggiungi un suffisso o scegli una "
+                           "cartella diversa.")
                 return
 
             if current.suffix.lower() != output.suffix.lower():

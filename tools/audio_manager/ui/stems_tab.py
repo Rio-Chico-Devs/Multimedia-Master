@@ -251,16 +251,15 @@ class StemsTab(ctk.CTkFrame):
                 stem = r.output.stem.lower()
                 lbl  = self._stem_labels.get(stem)
                 if lbl:
-                    self.after(0, lbl.configure,
-                               {"text": f"✓ {r.output.name}",
-                                "text_color": "#4caf50"})
+                    self.after(0, lambda l=lbl, n=r.output.name: l.configure(
+                        text=f"✓ {n}", text_color="#4caf50"))
             self.after(0, self._status.ok,
                        f"{len(ok)} tracce salvate in: {out_dir}")
         else:
             err = results[0].error if results else "Errore sconosciuto"
             for lbl in self._stem_labels.values():
-                self.after(0, lbl.configure,
-                           {"text": "✗ errore", "text_color": "#f44336"})
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✗ errore", text_color="#f44336"))
             self.after(0, self._status.err, err)
 
         self.after(0, lambda: self._btn_run.configure(state="normal"))

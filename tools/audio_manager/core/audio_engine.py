@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -23,6 +24,68 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
+
+
+# ── Safe tempfile helper ─────────────────────────────────────────────────────
+# `tempfile.mktemp()` is deprecated (race condition + symlink attack surface).
+# `mkstemp` atomically creates the file with 0600 permissions; we close the fd
+# and return the Path. Callers are responsible for `unlink(missing_ok=True)`.
+
+def safe_tempfile(suffix: str = "") -> Path:
+    fd, name = tempfile.mkstemp(suffix=suffix)
+    os.close(fd)
+    return Path(name)
+
+# ── Creative voice-effect filter chains (all via ffmpeg) ─────────────────────
+# Each entry: key → (human description, ffmpeg -af filter chain)
+# Pitch shifts use asetrate+aresample+atempo so duration is preserved.
+#   Lower pitch by factor F:  asetrate=int(44100*F), aresample=44100, atempo=1/F
+#   Raise pitch by factor F:  asetrate=int(44100*F), aresample=44100, atempo=1/F
+# atempo accepts [0.5, 2.0]; all chosen F values stay within that range.
+
+VOICE_EFFECTS: dict[str, tuple[str, str]] = {
+    "robot": (
+        "🤖 Robotica  —  voce metallica con eco digitale e flanger",
+        "aecho=1:0.88:60:0.4,"
+        "flanger=delay=0:depth=2:speed=0.5:width=70:phase=25,"
+        "aphaser=type=q:rate=2:depth=0.7",
+    ),
+    "evil": (
+        "😈 Malvagia  —  tono basso, coro sinistro, riverbero cupo",
+        # -4 semitones: F = 2^(-4/12) ≈ 0.7937 → asetrate=35012, atempo=1.260
+        "asetrate=35012,aresample=44100,atempo=1.260,"
+        "chorus=0.5:0.9:50|60:0.4|0.32:0.25|0.4:2|1.3,"
+        "aecho=0.7:0.85:800|1500:0.2|0.12",
+    ),
+    "zombie": (
+        "🧟 Zombie  —  voce gutturale con tremolo e riverbero decadente",
+        # -6 semitones: F = 2^(-6/12) ≈ 0.7071 → asetrate=31183, atempo=1.414
+        "asetrate=31183,aresample=44100,atempo=1.414,"
+        "tremolo=f=6:d=0.5,"
+        "aecho=0.8:0.88:500|1000:0.2|0.1",
+    ),
+    "psychic": (
+        "🌀 Telecinesi  —  voce eterea, riverbero ampio e pitch elevato",
+        # +2 semitones: F = 2^(2/12) ≈ 1.1225 → asetrate=49502, atempo=0.891
+        "asetrate=49502,aresample=44100,atempo=0.891,"
+        "aecho=0.9:0.9:800|1200|1600:0.3|0.25|0.2,"
+        "aphaser=type=q:rate=0.4:depth=0.8",
+    ),
+    "chibi": (
+        "🎀 Chibi  —  tono acuto kawaii con chorus vivace",
+        # +8 semitones: F = 2^(8/12) ≈ 1.5874 → asetrate=69986, atempo=0.630
+        "asetrate=69986,aresample=44100,atempo=0.630,"
+        "chorus=0.7:0.9:55:0.4:0.25:2,"
+        "volume=1.3",
+    ),
+    "virtual": (
+        "👾 Ragazza virtuale  —  tono dolce elevato con flanger digitale",
+        # +5 semitones: F = 2^(5/12) ≈ 1.3348 → asetrate=58864, atempo=0.749
+        "asetrate=58864,aresample=44100,atempo=0.749,"
+        "chorus=0.6:0.9:50:0.4:0.25:2,"
+        "flanger=delay=0:depth=2:speed=1:width=50:phase=25",
+    ),
+}
 
 # ── ID3 frame → (display_name, category) ─────────────────────────────────────
 # category: standard | technical | history | hidden | custom | art | info
@@ -339,6 +402,7 @@ class AudioEngine:
         if not self._ffmpeg:
             return AudioResult(output=output, success=False,
                                error="ffmpeg non trovato. Installalo e aggiungilo al PATH.")
+        proc: subprocess.Popen | None = None
         try:
             cmd = [self._ffmpeg, "-y", "-i", str(video), "-vn"]
             if sample_rate:
@@ -378,6 +442,14 @@ class AudioEngine:
             return self._ok(output, duration_s)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
+        finally:
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
 
     # ── Enhance (noise reduction + normalize) ─────────────────────────────
 
@@ -387,35 +459,45 @@ class AudioEngine:
         output:        Path,
         denoise:       bool  = True,
         normalize:     bool  = True,
+        highpass:      bool  = True,
+        eq_presence:   bool  = True,
+        compress:      bool  = True,
         prop_decrease: float = 0.75,
         progress_cb:   Callable[[float], None] | None = None,
     ) -> AudioResult:
-        """Reduce noise and/or normalize loudness. Requires soundfile + numpy.
-        For formats soundfile can't read (MP3/AAC), decodes to temp WAV first."""
-        _PCM_EXTS = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
-        tmp_in:  Path | None = None
-        tmp_out: Path | None = None
+        """Professional voice-enhancement pipeline.
+
+        Steps (each independently togglable):
+          1. Spectral-gating noise reduction  (noisereduce)
+          2. High-pass filter 80 Hz           (ffmpeg – rumble removal)
+          3. Presence EQ: -2 dB@300 Hz / +2.5 dB@3.5 kHz  (ffmpeg)
+          4. Light compression 3:1 threshold -24 dB        (ffmpeg)
+          5. LUFS -16 loudness normalisation  (ffmpeg loudnorm EBU R128)
+        """
+        _PCM_EXTS   = {".wav", ".flac", ".ogg", ".aiff", ".aif"}
+        tmp_in:       Path | None = None
+        tmp_denoised: Path | None = None
         try:
-            import soundfile as sf
-            import numpy as np
-
-            need_decode = src.suffix.lower() not in _PCM_EXTS
-            if need_decode:
-                if not self._ffmpeg:
-                    return AudioResult(output=output, success=False,
-                                       error="ffmpeg necessario per elaborare MP3/AAC")
-                tmp_in = Path(tempfile.mktemp(suffix=".wav"))
-                r = self.convert(src, tmp_in, "wav")
-                if not r.success:
-                    return r
-                read_src = tmp_in
-            else:
-                read_src = src
-
-            data, sr = sf.read(str(read_src), always_2d=True)
-            if progress_cb: progress_cb(0.15)
-
+            # ── 1. Noise reduction (Python / noisereduce) ──────────────────
             if denoise:
+                need_decode = src.suffix.lower() not in _PCM_EXTS
+                if need_decode:
+                    if not self._ffmpeg:
+                        return AudioResult(output=output, success=False,
+                                           error="ffmpeg richiesto per decodifica MP3/AAC")
+                    tmp_in = safe_tempfile(suffix=".wav")
+                    r = self.convert(src, tmp_in, "wav")
+                    if not r.success:
+                        return r
+                    read_src = tmp_in
+                else:
+                    read_src = src
+
+                import soundfile as sf
+                import numpy as np
+                data, sr = sf.read(str(read_src), always_2d=True)
+                if progress_cb: progress_cb(0.15)
+
                 try:
                     import noisereduce as nr
                     data = np.stack(
@@ -426,34 +508,55 @@ class AudioEngine:
                     )
                 except ImportError:
                     pass
-            if progress_cb: progress_cb(0.75)
+                if progress_cb: progress_cb(0.60)
 
-            if normalize:
-                peak = np.max(np.abs(data))
-                if peak > 1e-6:
-                    data = data / peak * 0.95
-
-            if progress_cb: progress_cb(0.90)
-
-            need_encode = output.suffix.lower() not in _PCM_EXTS
-            if need_encode:
-                tmp_out = Path(tempfile.mktemp(suffix=".wav"))
-                sf.write(str(tmp_out), data, sr, format="WAV")
-                result = self.convert(tmp_out, output, output.suffix.lstrip("."))
-                if progress_cb: progress_cb(1.0)
-                return result
+                tmp_denoised = safe_tempfile(suffix=".wav")
+                sf.write(str(tmp_denoised), data, sr, format="WAV")
+                ffmpeg_src = tmp_denoised
             else:
-                fmt_map = {".flac": "flac", ".wav": "WAV", ".ogg": "ogg"}
-                out_fmt = fmt_map.get(output.suffix.lower(), "WAV")
-                sf.write(str(output), data, sr, format=out_fmt)
-                if progress_cb: progress_cb(1.0)
-                return self._ok(output, len(data) / sr)
+                ffmpeg_src = src
+
+            if progress_cb: progress_cb(0.70)
+
+            # ── 2–5. Professional ffmpeg filter chain ──────────────────────
+            filters: list[str] = []
+            if highpass:
+                filters.append("highpass=f=80")
+            if eq_presence:
+                filters.append("equalizer=f=300:width_type=o:width=1:g=-2")
+                filters.append("equalizer=f=3500:width_type=o:width=1.5:g=2.5")
+            if compress:
+                filters.append(
+                    "acompressor=threshold=-24dB:ratio=3:attack=5:release=100:makeup=2dB")
+            if normalize:
+                filters.append("loudnorm=I=-16:TP=-1.5:LRA=11:print_format=none")
+
+            if not self._ffmpeg:
+                return AudioResult(output=output, success=False,
+                                   error="ffmpeg richiesto per il pipeline professionale")
+
+            import subprocess as sp
+            cmd = [self._ffmpeg, "-y", "-i", str(ffmpeg_src)]
+            if filters:
+                cmd += ["-af", ",".join(filters)]
+            cmd.append(str(output))
+            proc = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE,
+                          encoding="utf-8", errors="replace")
+            if proc.returncode != 0 or not output.exists() or output.stat().st_size == 0:
+                lines = (proc.stderr or "").strip().splitlines()
+                return AudioResult(output=output, success=False,
+                                   error=lines[-1] if lines else "ffmpeg error")
+
+            if progress_cb: progress_cb(1.0)
+            return self._ok(output, self.probe(output).duration_s)
+
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
         finally:
-            for t in (tmp_in, tmp_out):
+            for t in (tmp_in, tmp_denoised):
                 if t:
-                    t.unlink(missing_ok=True)
+                    try: t.unlink(missing_ok=True)
+                    except Exception: pass
 
     # ── Voice cleaner (WAV → web-optimised MP3) ────────────────────────────
 
@@ -602,7 +705,7 @@ class AudioEngine:
                 if not self._ffmpeg:
                     return AudioResult(output=output, success=False,
                                        error="ffmpeg necessario per la EQ su MP3/AAC")
-                tmp_in = Path(tempfile.mktemp(suffix=".wav"))
+                tmp_in = safe_tempfile(suffix=".wav")
                 r = self.convert(src, tmp_in, "wav")
                 if not r.success:
                     return r
@@ -639,7 +742,7 @@ class AudioEngine:
             # If output must be a non-PCM format, write WAV first then convert
             need_encode = output.suffix.lower() not in _PCM_EXTS
             if need_encode:
-                tmp_out = Path(tempfile.mktemp(suffix=".wav"))
+                tmp_out = safe_tempfile(suffix=".wav")
                 sf.write(str(tmp_out), eq_data, sr, format="WAV")
                 return self.convert(tmp_out, output, output.suffix.lstrip("."))
             else:
@@ -720,18 +823,62 @@ class AudioEngine:
         output: Path,
         speed:  float = 1.0,
     ) -> AudioResult:
-        """Change playback speed (pitch follows — use 0.5–2.0 range)."""
+        """Change playback speed preserving pitch (ffmpeg atempo time-stretch)."""
         try:
-            from pydub import AudioSegment
-            audio    = AudioSegment.from_file(str(src))
-            new_rate = int(audio.frame_rate * speed)
-            sped_up  = audio._spawn(
-                audio.raw_data,
-                overrides={"frame_rate": new_rate}
-            ).set_frame_rate(audio.frame_rate)
-            fmt = output.suffix.lstrip(".")
-            sped_up.export(str(output), format=fmt)
-            return self._ok(output, len(sped_up) / 1000.0)
+            if speed == 1.0:
+                import shutil
+                shutil.copy2(str(src), str(output))
+                return self._ok(output, self.probe(src).duration_s)
+
+            # atempo only accepts [0.5, 2.0]; chain two filters outside that range
+            if speed < 0.5:
+                filters = [f"atempo={speed*2:.4f}", "atempo=0.5"]
+            elif speed > 2.0:
+                filters = [f"atempo={speed/2:.4f}", "atempo=2.0"]
+            else:
+                filters = [f"atempo={speed:.4f}"]
+
+            import subprocess as sp
+            proc = sp.run(
+                [self._ffmpeg, "-y", "-i", str(src),
+                 "-af", ",".join(filters),
+                 str(output)],
+                stdout=sp.DEVNULL, stderr=sp.PIPE,
+                encoding="utf-8", errors="replace",
+            )
+            if proc.returncode != 0 or not output.exists() or output.stat().st_size == 0:
+                lines = (proc.stderr or "").strip().splitlines()
+                return AudioResult(output=output, success=False,
+                                   error=lines[-1] if lines else "ffmpeg error")
+            return self._ok(output, self.probe(output).duration_s)
+        except Exception as exc:
+            return AudioResult(output=output, success=False, error=str(exc))
+
+    def apply_voice_effect(
+        self,
+        src:    Path,
+        output: Path,
+        effect: str,
+    ) -> AudioResult:
+        """Apply a creative voice effect via ffmpeg (see VOICE_EFFECTS dict)."""
+        if effect not in VOICE_EFFECTS:
+            return AudioResult(output=output, success=False,
+                               error=f"Effetto sconosciuto: {effect}")
+        _, filter_chain = VOICE_EFFECTS[effect]
+        try:
+            import subprocess as sp
+            proc = sp.run(
+                [self._ffmpeg, "-y", "-i", str(src),
+                 "-af", filter_chain,
+                 str(output)],
+                stdout=sp.DEVNULL, stderr=sp.PIPE,
+                encoding="utf-8", errors="replace",
+            )
+            if proc.returncode != 0 or not output.exists() or output.stat().st_size == 0:
+                lines = (proc.stderr or "").strip().splitlines()
+                return AudioResult(output=output, success=False,
+                                   error=lines[-1] if lines else "ffmpeg error")
+            return self._ok(output, self.probe(output).duration_s)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
 
@@ -758,12 +905,14 @@ class AudioEngine:
                 # soundfile can't read MP3/AAC — decode to a temp WAV via ffmpeg
                 if not self._ffmpeg:
                     return [0.0] * num_samples, [0.0] * num_samples
-                tmp = Path(tempfile.mktemp(suffix=".wav"))
-                subprocess.run(
+                tmp = safe_tempfile(suffix=".wav")
+                proc = subprocess.run(
                     [self._ffmpeg, "-y", "-i", str(path), str(tmp)],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                     encoding="utf-8", errors="replace",
                 )
+                if proc.returncode != 0 or tmp.stat().st_size == 0:
+                    return [0.0] * num_samples, [0.0] * num_samples
                 data, _ = sf.read(str(tmp), always_2d=False)
 
             if data.ndim > 1:
@@ -794,6 +943,7 @@ class AudioEngine:
         Separate a track into stems using demucs (external process).
         Outputs to output_dir/<model>/<track_name>/{vocals,drums,bass,other}.wav
         """
+        proc: subprocess.Popen | None = None
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             cmd = [
@@ -828,6 +978,15 @@ class AudioEngine:
             return results
         except Exception as exc:
             return [AudioResult(output=None, success=False, error=str(exc))]
+        finally:
+            # Ensure demucs doesn't linger as an orphan on exception/cancel
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=5)
+                except Exception:
+                    try: proc.kill()
+                    except Exception: pass
 
     # ── Metadata / Tags ───────────────────────────────────────────────────
 
@@ -1647,7 +1806,7 @@ class AudioEngine:
         FLAC STREAMINFO encoder field, OGG vendor string) cannot be removed
         without re-encoding, which would degrade quality in lossy formats.
         """
-        tmp = Path(tempfile.mktemp(suffix=path.suffix))
+        tmp = safe_tempfile(suffix=path.suffix)
         try:
             if self._ffmpeg:
                 res = subprocess.run(
