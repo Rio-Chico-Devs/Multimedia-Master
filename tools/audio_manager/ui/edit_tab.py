@@ -983,13 +983,15 @@ class EditTab(ctk.CTkFrame):
         out_dir = self._out_dir if self._out_dir else src.parent
         output  = out_dir / (src.stem + suffix + ext)
 
+        voice_effect = self._voice_effect_var.get()
         self._btn_apply.configure(state="disabled")
         self._status.busy("Applicazione effetti…")
         threading.Thread(
-            target=self._worker, args=(src, output, fmt), daemon=True
+            target=self._worker, args=(src, output, fmt, voice_effect), daemon=True
         ).start()
 
-    def _worker(self, src: Path, output: Path, fmt: str) -> None:
+    def _worker(self, src: Path, output: Path, fmt: str,
+                voice_effect: str = "none") -> None:
         import shutil
         tmp_a   = safe_tempfile(suffix=src.suffix)
         tmp_b   = safe_tempfile(suffix=src.suffix)
@@ -1039,6 +1041,11 @@ class EditTab(ctk.CTkFrame):
             if self._speed_var.get() and self._speed_slider.get() != 1.0:
                 if not step(lambda c, d: self._engine.change_speed(
                         c, d, speed=self._speed_slider.get())):
+                    return
+
+            if voice_effect != "none":
+                if not step(lambda c, d, ve=voice_effect:
+                            self._engine.apply_voice_effect(c, d, effect=ve)):
                     return
 
             # Final: to target format
