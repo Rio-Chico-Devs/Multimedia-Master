@@ -153,9 +153,11 @@ class WaveformCanvas(tk.Canvas):
         w   = max(self.winfo_width(),  1)
         h   = max(self.winfo_height(), 1)
         mid = h // 2
-        sx  = int(self._start_ms  / self._duration_ms * w)
-        ex  = int(self._end_ms    / self._duration_ms * w)
-        cx  = int(self._cursor_ms / self._duration_ms * w)
+        # Map [0, duration_ms] → [0, w-1] so 100% stays on the last visible pixel.
+        W   = max(w - 1, 1)
+        sx  = int(self._start_ms  / self._duration_ms * W)
+        ex  = int(self._end_ms    / self._duration_ms * W)
+        cx  = int(self._cursor_ms / self._duration_ms * W)
         r   = self.HANDLE_R
 
         # Shade outside selection (stipple fakes transparency — Tk has no alpha)
@@ -163,7 +165,7 @@ class WaveformCanvas(tk.Canvas):
             self.create_rectangle(0, 0, sx, h,
                                   fill=_WF_SHADE, outline="",
                                   stipple="gray50", tags="overlay")
-        if ex < w:
+        if ex < w - 1:
             self.create_rectangle(ex, 0, w, h,
                                   fill=_WF_SHADE, outline="",
                                   stipple="gray50", tags="overlay")
@@ -179,7 +181,7 @@ class WaveformCanvas(tk.Canvas):
                                fill=_WF_MARKER_E, outline="", tags="overlay")
 
         # Playhead cursor (thin white line with small top triangle)
-        if 0 <= cx <= w:
+        if 0 <= cx <= W:
             self.create_line(cx, 0, cx, h, fill=_WF_CURSOR, width=1,
                              dash=(4, 2), tags="overlay")
             self.create_polygon(cx - 4, 0, cx + 4, 0, cx, 6,
@@ -193,8 +195,9 @@ class WaveformCanvas(tk.Canvas):
         if self._duration_ms <= 0:
             return
         w  = max(self.winfo_width(), 1)
-        sx = int(self._start_ms / self._duration_ms * w)
-        ex = int(self._end_ms   / self._duration_ms * w)
+        W  = max(w - 1, 1)
+        sx = int(self._start_ms / self._duration_ms * W)
+        ex = int(self._end_ms   / self._duration_ms * W)
         r  = self.HANDLE_R * 3   # wider hit zone
 
         if abs(event.x - sx) <= r:
@@ -204,7 +207,7 @@ class WaveformCanvas(tk.Canvas):
         else:
             # Click on waveform (not on a marker) → move cursor/playhead
             self._dragging = None
-            ms = int(max(0, min(event.x, w)) / w * self._duration_ms)
+            ms = int(max(0, min(event.x, W)) / W * self._duration_ms)
             self._cursor_ms = ms
             self._draw_overlays()
             if self._on_cursor_change:
@@ -214,7 +217,8 @@ class WaveformCanvas(tk.Canvas):
         if not self._dragging or self._duration_ms <= 0:
             return
         w  = max(self.winfo_width(), 1)
-        ms = int(max(0, min(event.x, w)) / w * self._duration_ms)
+        W  = max(w - 1, 1)
+        ms = int(max(0, min(event.x, W)) / W * self._duration_ms)
         GAP = 100   # minimum gap between markers (ms)
 
         if self._dragging == "start":

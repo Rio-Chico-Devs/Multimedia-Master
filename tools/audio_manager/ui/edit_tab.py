@@ -420,11 +420,13 @@ class EditTab(ctk.CTkFrame):
     # ── Output ─────────────────────────────────────────────────────────────
 
     def _build_output_section(self) -> None:
+        self._out_dir: Path | None = None
         card = self._card("💾  Output")
         body = ctk.CTkFrame(card, fg_color="transparent")
         body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
         body.grid_columnconfigure(1, weight=1)
 
+        # Format
         ctk.CTkLabel(body, text="Formato:", width=70, anchor="w",
                      font=ctk.CTkFont(size=11)
                      ).grid(row=0, column=0, sticky="w", pady=2)
@@ -433,16 +435,48 @@ class EditTab(ctk.CTkFrame):
             body, variable=self._out_fmt_var,
             values=["Stesso del file"] + list(AUDIO_FORMATS.keys()),
             dynamic_resizing=False,
-        ).grid(row=0, column=1, sticky="ew", padx=(4, 0), pady=2)
+        ).grid(row=0, column=1, columnspan=3, sticky="ew", padx=(4, 0), pady=2)
 
+        # Suffix (empty = same name, overwrites source if same folder)
         ctk.CTkLabel(body, text="Suffisso:", width=70, anchor="w",
                      font=ctk.CTkFont(size=11)
                      ).grid(row=1, column=0, sticky="w", pady=2)
         self._suffix_entry = ctk.CTkEntry(
-            body, placeholder_text="_modificato")
+            body, placeholder_text="vuoto = stesso nome (sovrascrive)")
         self._suffix_entry.insert(0, "_modificato")
-        self._suffix_entry.grid(row=1, column=1, sticky="ew",
+        self._suffix_entry.grid(row=1, column=1, columnspan=3, sticky="ew",
                                 padx=(4, 0), pady=2)
+
+        # Output folder
+        ctk.CTkLabel(body, text="Cartella:", width=70, anchor="w",
+                     font=ctk.CTkFont(size=11)
+                     ).grid(row=2, column=0, sticky="w", pady=(8, 2))
+        self._out_dir_lbl = ctk.CTkLabel(
+            body, text="Stessa del file sorgente",
+            anchor="w", text_color="gray",
+            font=ctk.CTkFont(size=11))
+        self._out_dir_lbl.grid(row=2, column=1, sticky="ew",
+                               padx=(4, 0), pady=(8, 2))
+        ctk.CTkButton(body, text="Sfoglia", width=72, height=28,
+                      command=self._browse_out_dir,
+                      ).grid(row=2, column=2, padx=(8, 0), pady=(8, 2))
+        ctk.CTkButton(body, text="✕", width=30, height=28,
+                      fg_color="#2a2a2a", hover_color="#3a3a3a",
+                      command=self._clear_out_dir,
+                      ).grid(row=2, column=3, padx=(4, 0), pady=(8, 2))
+
+    def _browse_out_dir(self) -> None:
+        from tkinter import filedialog
+        d = filedialog.askdirectory(title="Scegli cartella di output")
+        if d:
+            self._out_dir = Path(d)
+            self._out_dir_lbl.configure(text=str(self._out_dir),
+                                        text_color="white")
+
+    def _clear_out_dir(self) -> None:
+        self._out_dir = None
+        self._out_dir_lbl.configure(text="Stessa del file sorgente",
+                                    text_color="gray")
 
     # ── File loaded ────────────────────────────────────────────────────────
 
@@ -894,8 +928,9 @@ class EditTab(ctk.CTkFrame):
                else AUDIO_FORMATS[fmt_choice].ext)
         fmt = ext.lstrip(".")
 
-        suffix = self._suffix_entry.get().strip() or "_modificato"
-        output = src.parent / (src.stem + suffix + ext)
+        suffix  = self._suffix_entry.get().strip()   # empty = same name
+        out_dir = self._out_dir if self._out_dir else src.parent
+        output  = out_dir / (src.stem + suffix + ext)
 
         self._btn_apply.configure(state="disabled")
         self._status.busy("Applicazione effetti…")
@@ -956,10 +991,13 @@ class EditTab(ctk.CTkFrame):
                     return
 
             # Final: to target format
+            # Block only when nothing was processed AND output == source
+            # (processed output is in a temp file so current != src in that case)
             if current == src and output.resolve() == src.resolve():
                 self.after(0, self._status.err,
-                           "Il file di output coincide con il sorgente. "
-                           "Cambia il suffisso.")
+                           "Nessun effetto attivo e il file di output è lo stesso "
+                           "del sorgente. Aggiungi un suffisso o scegli una "
+                           "cartella diversa.")
                 return
 
             if current.suffix.lower() != output.suffix.lower():
