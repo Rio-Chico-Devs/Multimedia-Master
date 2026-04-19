@@ -121,13 +121,50 @@ class EnhanceTab(ctk.CTkFrame):
 
         Separator(right).pack()
 
-        # Normalise
-        SectionLabel(right, "📊  Normalizzazione").pack(
+        # EQ voce
+        SectionLabel(right, "🎚  Equalizzazione voce").pack(
+            fill="x", padx=12, pady=(10, 4))
+        self._highpass_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(right, text="Filtro rumble (<80 Hz)",
+                        variable=self._highpass_var,
+                        ).pack(anchor="w", padx=16, pady=2)
+        self._eq_pres_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(right, text="Boost presenza (+2.5 dB a 3.5 kHz)",
+                        variable=self._eq_pres_var,
+                        ).pack(anchor="w", padx=16, pady=(2, 8))
+
+        Separator(right).pack()
+
+        # Compressione
+        SectionLabel(right, "⚙  Compressione dinamica").pack(
+            fill="x", padx=12, pady=(10, 4))
+        self._compress_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(right, text="Compressione leggera (3:1 · threshold -24 dB)",
+                        variable=self._compress_var,
+                        ).pack(anchor="w", padx=16, pady=(2, 8))
+
+        Separator(right).pack()
+
+        # Normalizzazione LUFS
+        SectionLabel(right, "📊  Normalizzazione LUFS").pack(
             fill="x", padx=12, pady=(10, 6))
         self._norm_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(right, text="Normalizza volume (peak -0.45 dBFS)",
+        ctk.CTkCheckBox(right, text="Loudness -16 LUFS (standard broadcast/streaming)",
                         variable=self._norm_var,
                         ).pack(anchor="w", padx=16, pady=2)
+        ctk.CTkLabel(right,
+                     text="Usa l'algoritmo EBU R128 per un volume\n"
+                          "uniforme su tutte le piattaforme.",
+                     text_color="#777", font=ctk.CTkFont(size=10),
+                     justify="left",
+                     ).pack(anchor="w", padx=16, pady=(2, 4))
+
+        ctk.CTkButton(
+            right,
+            text="⭐  Imposta preset professionale",
+            height=30, fg_color="#1a3a5c", hover_color="#1f4a7a",
+            command=self._set_pro_preset,
+        ).pack(fill="x", padx=12, pady=(6, 4))
 
         Separator(right).pack(pady=(8, 0))
 
@@ -230,6 +267,17 @@ class EnhanceTab(ctk.CTkFrame):
 
     # ── Callbacks ──────────────────────────────────────────────────────────
 
+    def _set_pro_preset(self) -> None:
+        """Enable all options at their optimal professional values."""
+        if hasattr(self, "_denoise_var"):
+            self._denoise_var.set(True)
+        self._strength.set(0.75)
+        self._strength_lbl.configure(text="75%")
+        self._highpass_var.set(True)
+        self._eq_pres_var.set(True)
+        self._compress_var.set(True)
+        self._norm_var.set(True)
+
     def _choose_dir(self) -> None:
         from tkinter import filedialog
         d = filedialog.askdirectory()
@@ -277,6 +325,9 @@ class EnhanceTab(ctk.CTkFrame):
                 output=output,
                 denoise=self._denoise_var.get(),
                 normalize=self._norm_var.get(),
+                highpass=self._highpass_var.get(),
+                eq_presence=self._eq_pres_var.get(),
+                compress=self._compress_var.get(),
                 prop_decrease=self._strength.get(),
                 progress_cb=lambda p, _i=i: _prog(p, _i),
             )

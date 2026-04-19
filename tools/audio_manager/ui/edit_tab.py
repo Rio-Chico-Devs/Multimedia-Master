@@ -19,7 +19,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, StatusBar
-from core.audio_engine import AudioEngine, AudioInfo, safe_tempfile
+from core.audio_engine import AudioEngine, AudioInfo, safe_tempfile, VOICE_EFFECTS
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS, AUDIO_FORMATS
 from .widgets import MediaFilePicker, WaveformCanvas
@@ -76,6 +76,7 @@ class EditTab(ctk.CTkFrame):
         self._after_id:         str | None       = None
         self._preview_timer:    str | None       = None
         self._previewing:       bool             = False
+        self._voice_effect_var: ctk.StringVar    = ctk.StringVar(value="none")
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -196,6 +197,7 @@ class EditTab(ctk.CTkFrame):
         self._build_volume_section()
         self._build_eq_section()
         self._build_speed_section()
+        self._build_voice_effects_section()
         self._build_output_section()
 
         # Row 5 — bottom bar
@@ -416,6 +418,55 @@ class EditTab(ctk.CTkFrame):
                 text=f"Velocità: {v:.2f}×"))
         self._speed_slider.set(1.0)
         self._speed_slider.pack(fill="x", pady=(2, 0))
+
+    # ── Voice effects ──────────────────────────────────────────────────
+
+    def _build_voice_effects_section(self) -> None:
+        card = self._card("🎭  Effetti voce speciali")
+        body = ctk.CTkFrame(card, fg_color="transparent")
+        body.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 10))
+        body.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            body,
+            text="Applicato dopo tutti gli altri effetti. "
+                 "Usa il pulsante Anteprima per testarlo prima di esportare.",
+            text_color="#666", font=ctk.CTkFont(size=10), justify="left",
+        ).pack(anchor="w", pady=(0, 8))
+
+        # Radio buttons in a 4-column grid
+        btn_frame = ctk.CTkFrame(body, fg_color="transparent")
+        btn_frame.pack(fill="x")
+        for col in range(4):
+            btn_frame.grid_columnconfigure(col, weight=1)
+
+        effect_choices = [("none", "❌  Nessuno")] + [
+            (k, v[0].split("  —")[0]) for k, v in VOICE_EFFECTS.items()
+        ]
+        for idx, (key, label) in enumerate(effect_choices):
+            ctk.CTkRadioButton(
+                btn_frame,
+                text=label,
+                variable=self._voice_effect_var,
+                value=key,
+                command=self._on_effect_change,
+                font=ctk.CTkFont(size=11),
+            ).grid(row=idx // 4, column=idx % 4,
+                   sticky="w", padx=6, pady=3)
+
+        self._effect_desc_lbl = ctk.CTkLabel(
+            body, text="",
+            text_color="#888", font=ctk.CTkFont(size=10),
+            wraplength=520, justify="left", anchor="w")
+        self._effect_desc_lbl.pack(fill="x", pady=(8, 0))
+
+    def _on_effect_change(self) -> None:
+        key = self._voice_effect_var.get()
+        if key == "none" or key not in VOICE_EFFECTS:
+            self._effect_desc_lbl.configure(text="")
+        else:
+            desc, _ = VOICE_EFFECTS[key]
+            self._effect_desc_lbl.configure(text=desc)
 
     # ── Output ─────────────────────────────────────────────────────────────
 
