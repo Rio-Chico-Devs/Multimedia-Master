@@ -741,18 +741,34 @@ class AudioEngine:
         output: Path,
         speed:  float = 1.0,
     ) -> AudioResult:
-        """Change playback speed (pitch follows — use 0.5–2.0 range)."""
+        """Change playback speed preserving pitch (ffmpeg atempo time-stretch)."""
         try:
-            from pydub import AudioSegment
-            audio    = AudioSegment.from_file(str(src))
-            new_rate = int(audio.frame_rate * speed)
-            sped_up  = audio._spawn(
-                audio.raw_data,
-                overrides={"frame_rate": new_rate}
-            ).set_frame_rate(audio.frame_rate)
-            fmt = output.suffix.lstrip(".")
-            sped_up.export(str(output), format=fmt)
-            return self._ok(output, len(sped_up) / 1000.0)
+            if speed == 1.0:
+                import shutil
+                shutil.copy2(str(src), str(output))
+                return self._ok(output, self.probe(src).duration_s)
+
+            # atempo only accepts [0.5, 2.0]; chain two filters outside that range
+            if speed < 0.5:
+                filters = [f"atempo={speed*2:.4f}", "atempo=0.5"]
+            elif speed > 2.0:
+                filters = [f"atempo={speed/2:.4f}", "atempo=2.0"]
+            else:
+                filters = [f"atempo={speed:.4f}"]
+
+            import subprocess as sp
+            proc = sp.run(
+                [self._ffmpeg, "-y", "-i", str(src),
+                 "-af", ",".join(filters),
+                 str(output)],
+                stdout=sp.DEVNULL, stderr=sp.PIPE,
+                encoding="utf-8", errors="replace",
+            )
+            if proc.returncode != 0 or not output.exists() or output.stat().st_size == 0:
+                lines = (proc.stderr or "").strip().splitlines()
+                return AudioResult(output=output, success=False,
+                                   error=lines[-1] if lines else "ffmpeg error")
+            return self._ok(output, self.probe(output).duration_s)
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
 
