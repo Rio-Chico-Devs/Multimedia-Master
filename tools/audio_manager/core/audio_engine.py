@@ -45,45 +45,61 @@ def safe_tempfile(suffix: str = "") -> Path:
 
 VOICE_EFFECTS: dict[str, tuple[str, str]] = {
     "robot": (
-        "🤖 Robotica  —  voce metallica con eco digitale e flanger",
-        "aecho=1:0.88:60:0.4,"
-        "flanger=delay=0:depth=2:speed=0.5:width=70:phase=25,"
-        "aphaser=type=q:rate=2:depth=0.7",
+        "🤖 Robotica  —  modulazione ad anello (AM 60 Hz) + eco metallico + phaser",
+        # AM modulation at 60 Hz via tremolo simulates ring-modulator "buzz".
+        # Heavy compressor first to flatten dynamics, making the modulation audible.
+        "acompressor=threshold=-25dB:ratio=20:attack=0.01:release=0.05:makeup=8dB,"
+        "tremolo=f=60:d=0.9,"
+        "aphaser=in_gain=0.4:out_gain=0.74:delay=3:decay=0.4:speed=0.5:type=t,"
+        "aecho=1:0.8:15|30:0.5|0.3,"
+        "alimiter=level_out=0.9",
     ),
     "evil": (
-        "😈 Malvagia  —  tono basso, coro sinistro, riverbero cupo",
-        # -4 semitones: F = 2^(-4/12) ≈ 0.7937 → asetrate=35012, atempo=1.260
-        "asetrate=35012,aresample=44100,atempo=1.260,"
-        "chorus=0.5:0.9:50|60:0.4|0.32:0.25|0.4:2|1.3,"
-        "aecho=0.7:0.85:800|1500:0.2|0.12",
+        "😈 Malvagia  —  -8 semitoni, EQ scuro, riverbero abissale",
+        # -8 semitones: F = 2^(-8/12) = 0.6300 → asetrate=27783, atempo=1.587
+        "asetrate=27783,aresample=44100,atempo=1.587,"
+        "lowpass=f=8000,bass=g=6,treble=g=-6,"
+        "aecho=0.9:0.9:1200|2000|3000:0.4|0.3|0.2,"
+        "acompressor=threshold=-20dB:ratio=4:attack=5:release=200:makeup=3dB,"
+        "alimiter=level_out=0.9",
     ),
     "zombie": (
-        "🧟 Zombie  —  voce gutturale con tremolo e riverbero decadente",
-        # -6 semitones: F = 2^(-6/12) ≈ 0.7071 → asetrate=31183, atempo=1.414
-        "asetrate=31183,aresample=44100,atempo=1.414,"
-        "tremolo=f=6:d=0.5,"
-        "aecho=0.8:0.88:500|1000:0.2|0.1",
+        "🧟 Zombie  —  -7 semitoni, bitcrusher, tremolo lento, riverbero decadente",
+        # -7 semitones: F = 2^(-7/12) = 0.6674 → asetrate=29433, atempo=1.498
+        "asetrate=29433,aresample=44100,atempo=1.498,"
+        "acrusher=level_in=4:level_out=0.5:bits=14:mode=log:aa=1,"
+        "tremolo=f=5:d=0.6,"
+        "bass=g=3,"
+        "aecho=0.8:0.85:400|800|1500:0.3|0.2|0.1,"
+        "alimiter=level_out=0.9",
     ),
     "psychic": (
-        "🌀 Telecinesi  —  voce eterea, riverbero ampio e pitch elevato",
-        # +2 semitones: F = 2^(2/12) ≈ 1.1225 → asetrate=49502, atempo=0.891
-        "asetrate=49502,aresample=44100,atempo=0.891,"
-        "aecho=0.9:0.9:800|1200|1600:0.3|0.25|0.2,"
-        "aphaser=type=q:rate=0.4:depth=0.8",
+        "🌀 Telecinesi  —  +3 semitoni, vibrato, riverbero enorme, phaser etereo",
+        # +3 semitones: F = 2^(3/12) = 1.1892 → asetrate=52444, atempo=0.841
+        "asetrate=52444,aresample=44100,atempo=0.841,"
+        "vibrato=f=3:d=0.3,"
+        "aphaser=in_gain=0.6:out_gain=0.8:delay=3:decay=0.5:speed=0.3:type=q,"
+        "aecho=0.95:0.95:500|1000|2000|3500:0.5|0.4|0.3|0.2,"
+        "treble=g=2,"
+        "alimiter=level_out=0.9",
     ),
     "chibi": (
-        "🎀 Chibi  —  tono acuto kawaii con chorus vivace",
-        # +8 semitones: F = 2^(8/12) ≈ 1.5874 → asetrate=69986, atempo=0.630
-        "asetrate=69986,aresample=44100,atempo=0.630,"
-        "chorus=0.7:0.9:55:0.4:0.25:2,"
-        "volume=1.3",
+        "🎀 Chibi  —  +8 semitoni, EQ brillante, chorus doppio kawaii",
+        # +8 semitones: F = 2^(8/12) = 1.5874 → asetrate=70004, atempo=0.630
+        "asetrate=70004,aresample=44100,atempo=0.630,"
+        "treble=g=5,highpass=f=100,"
+        "chorus=0.8:0.9:40|55:0.3|0.25:0.3|0.4:1.5|2,"
+        "volume=1.5,"
+        "alimiter=level_out=0.9",
     ),
     "virtual": (
-        "👾 Ragazza virtuale  —  tono dolce elevato con flanger digitale",
-        # +5 semitones: F = 2^(5/12) ≈ 1.3348 → asetrate=58864, atempo=0.749
-        "asetrate=58864,aresample=44100,atempo=0.749,"
-        "chorus=0.6:0.9:50:0.4:0.25:2,"
-        "flanger=delay=0:depth=2:speed=1:width=50:phase=25",
+        "👾 Ragazza virtuale  —  +5 semitoni, flanger digitale, chorus anime",
+        # +5 semitones: F = 2^(5/12) = 1.3348 → asetrate=58867, atempo=0.749
+        "asetrate=58867,aresample=44100,atempo=0.749,"
+        "treble=g=3,"
+        "flanger=delay=0:depth=3:speed=0.8:width=60:phase=25:shape=sinusoidal:interp=linear,"
+        "chorus=0.6:0.9:45|60:0.3|0.25:0.25|0.35:1.5|2,"
+        "alimiter=level_out=0.9",
     ),
 }
 
