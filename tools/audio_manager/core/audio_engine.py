@@ -48,7 +48,8 @@ VOICE_EFFECTS: dict[str, tuple[str, str]] = {
         "🤖 Robotica  —  modulazione ad anello (AM 60 Hz) + eco metallico + phaser",
         # AM modulation at 60 Hz via tremolo simulates ring-modulator "buzz".
         # Heavy compressor first to flatten dynamics, making the modulation audible.
-        "acompressor=threshold=-25dB:ratio=20:attack=0.01:release=0.05:makeup=8dB,"
+        # threshold=0.056 ≈ -25 dBFS (linear); makeup=2.51 ≈ +8 dB (linear).
+        "acompressor=threshold=0.056:ratio=20:attack=5:release=100:makeup=2.51,"
         "tremolo=f=60:d=0.9,"
         "aphaser=in_gain=0.4:out_gain=0.74:delay=3:decay=0.4:speed=0.5:type=t,"
         "aecho=1:0.8:15|30:0.5|0.3,"
@@ -60,7 +61,8 @@ VOICE_EFFECTS: dict[str, tuple[str, str]] = {
         "asetrate=27783,aresample=44100,atempo=1.587,"
         "lowpass=f=8000,bass=g=6,treble=g=-6,"
         "aecho=0.9:0.9:1200|2000|3000:0.4|0.3|0.2,"
-        "acompressor=threshold=-20dB:ratio=4:attack=5:release=200:makeup=3dB,"
+        # threshold=0.1 ≈ -20 dBFS; makeup=1.41 ≈ +3 dB (linear, not dB string).
+        "acompressor=threshold=0.1:ratio=4:attack=5:release=200:makeup=1.41,"
         "alimiter=level_out=0.9",
     ),
     "zombie": (
@@ -307,6 +309,7 @@ class AudioEngine:
                     [self._ffmpeg, "-i", str(path)],
                     stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
                     encoding="utf-8", errors="replace",
+                    timeout=15,
                 )
                 for line in result.stderr.splitlines():
                     if "Duration:" in line and duration_s == 0.0:
@@ -542,8 +545,9 @@ class AudioEngine:
                 filters.append("equalizer=f=300:width_type=o:width=1:g=-2")
                 filters.append("equalizer=f=3500:width_type=o:width=1.5:g=2.5")
             if compress:
+                # threshold=0.063 ≈ -24 dBFS; makeup=1.26 ≈ +2 dB (linear).
                 filters.append(
-                    "acompressor=threshold=-24dB:ratio=3:attack=5:release=100:makeup=2dB")
+                    "acompressor=threshold=0.063:ratio=3:attack=5:release=100:makeup=1.26")
             if normalize:
                 filters.append("loudnorm=I=-16:TP=-1.5:LRA=11:print_format=none")
 

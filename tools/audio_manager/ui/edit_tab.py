@@ -983,6 +983,17 @@ class EditTab(ctk.CTkFrame):
         out_dir = self._out_dir if self._out_dir else src.parent
         output  = out_dir / (src.stem + suffix + ext)
 
+        # Overwrite guard: warn before clobbering an existing file
+        # (must be checked on the main thread so the dialog shows correctly).
+        if output.exists() and output.resolve() != src.resolve():
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                "Sovrascrivere?",
+                f"Il file esiste già:\n{output.name}\n\nSovrascrivere?",
+                icon="warning",
+            ):
+                return
+
         voice_effect = self._voice_effect_var.get()
         self._btn_apply.configure(state="disabled")
         self._status.busy("Applicazione effetti…")

@@ -19,6 +19,7 @@ import customtkinter as ctk
 
 from core.audio_engine import AudioEngine
 from core.dependencies import check as check_deps, install_hint
+from common.version import __version__
 
 from .convert_tab  import ConvertTab
 from .extract_tab  import ExtractTab
@@ -34,7 +35,7 @@ class AudioWindow(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Audio Manager — Multimedia Master")
+        self.title(f"Audio Manager — Multimedia Master  v{__version__}")
         self.geometry("960x700")
         self.minsize(820, 580)
 
@@ -56,7 +57,7 @@ class AudioWindow(ctk.CTk):
             anchor="w",
         ).pack(side="left")
         ctk.CTkLabel(
-            header, text="100% offline  ·  nessun cloud",
+            header, text=f"v{__version__}  ·  100% offline  ·  nessun cloud",
             text_color="#555", font=ctk.CTkFont(size=11),
             anchor="e",
         ).pack(side="right")

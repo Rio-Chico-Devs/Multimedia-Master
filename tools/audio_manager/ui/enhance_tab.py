@@ -38,10 +38,11 @@ class EnhanceTab(ctk.CTkFrame):
     def __init__(self, parent, engine: AudioEngine, deps: DepStatus, **kw):
         kw.setdefault("fg_color", "transparent")
         super().__init__(parent, **kw)
-        self._engine  = engine
-        self._deps    = deps
+        self._engine       = engine
+        self._deps         = deps
         self._out_dir: Path | None = None
         self._file_rows: list[tuple[Path, ctk.CTkFrame, ctk.CTkLabel]] = []
+        self._cancel_event = threading.Event()
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -209,12 +210,18 @@ class EnhanceTab(ctk.CTkFrame):
         bot.grid_columnconfigure(0, weight=1)
         self._status = StatusBar(bot)
         self._status.grid(row=0, column=0, sticky="ew")
+        self._btn_cancel = ctk.CTkButton(
+            bot, text="Annulla",
+            width=90, height=36, state="disabled",
+            fg_color="#5a1a1a", hover_color="#7a2a2a",
+            command=self._cancel)
+        self._btn_cancel.grid(row=0, column=1, padx=(8, 4))
         self._btn_run = ctk.CTkButton(
             bot, text="✨  Migliora",
             width=130, height=36,
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._run)
-        self._btn_run.grid(row=0, column=1, padx=(8, 0))
+        self._btn_run.grid(row=0, column=2, padx=(0, 0))
 
     # ── File list ──────────────────────────────────────────────────────────
 
@@ -258,6 +265,8 @@ class EnhanceTab(ctk.CTkFrame):
             row.destroy()
         self._file_rows.clear()
         self._refresh_empty()
+        self._progress.set(0)
+        self._status.clear()
 
     def _refresh_empty(self) -> None:
         if self._file_rows:
@@ -286,6 +295,13 @@ class EnhanceTab(ctk.CTkFrame):
             self._dir_lbl.configure(
                 text=f"…/{Path(d).name}", text_color="white")
 
+    # ── Cancel ─────────────────────────────────────────────────────────────
+
+    def _cancel(self) -> None:
+        self._cancel_event.set()
+        self._btn_cancel.configure(state="disabled")
+        self._status.busy("Annullamento…")
+
     # ── Run ────────────────────────────────────────────────────────────────
 
     def _run(self) -> None:
@@ -296,16 +312,31 @@ class EnhanceTab(ctk.CTkFrame):
         fmt_choice = self._out_fmt_var.get()
         new_ext    = _EXT_MAP[fmt_choice]   # None = keep original ext
 
+        # Capture all UI state on main thread — tkinter vars must NOT be read
+        # from background threads (crashes Tcl/Tk on Windows).
+        params = {
+            "denoise":       self._denoise_var.get(),
+            "normalize":     self._norm_var.get(),
+            "highpass":      self._highpass_var.get(),
+            "eq_presence":   self._eq_pres_var.get(),
+            "compress":      self._compress_var.get(),
+            "prop_decrease": self._strength.get(),
+        }
+        rows_snapshot = list(self._file_rows)
+
+        self._cancel_event.clear()
         self._btn_run.configure(state="disabled")
+        self._btn_cancel.configure(state="normal")
         self._progress.set(0)
-        self._status.busy(f"Avvio (0/{len(self._file_rows)})…")
+        self._status.busy(f"Avvio (0/{len(rows_snapshot)})…")
         threading.Thread(
-            target=self._worker, args=(new_ext,), daemon=True,
+            target=self._worker, args=(new_ext, params, rows_snapshot), daemon=True,
         ).start()
 
-    def _worker(self, new_ext: str | None) -> None:
+    def _worker(self, new_ext: str | None, params: dict,
+                rows: list) -> None:
         import sys
-        total  = len(self._file_rows)
+        total  = len(rows)
         ok     = 0
         errors: list[str] = []
 
@@ -313,7 +344,12 @@ class EnhanceTab(ctk.CTkFrame):
             overall = (i + p) / total
             self.after(0, self._progress.set, overall)
 
-        for i, (path, _, lbl) in enumerate(self._file_rows):
+        for i, (path, _, lbl) in enumerate(rows):
+            if self._cancel_event.is_set():
+                self.after(0, self._status.err,
+                           f"Annullato — {ok}/{i} completati")
+                break
+
             ext     = new_ext or path.suffix.lower()
             out_dir = self._out_dir or path.parent
             output  = out_dir / (path.stem + ext)
@@ -323,12 +359,12 @@ class EnhanceTab(ctk.CTkFrame):
             result = self._engine.enhance(
                 src=path,
                 output=output,
-                denoise=self._denoise_var.get(),
-                normalize=self._norm_var.get(),
-                highpass=self._highpass_var.get(),
-                eq_presence=self._eq_pres_var.get(),
-                compress=self._compress_var.get(),
-                prop_decrease=self._strength.get(),
+                denoise=params["denoise"],
+                normalize=params["normalize"],
+                highpass=params["highpass"],
+                eq_presence=params["eq_presence"],
+                compress=params["compress"],
+                prop_decrease=params["prop_decrease"],
                 progress_cb=lambda p, _i=i: _prog(p, _i),
             )
             if result.success:
@@ -342,12 +378,15 @@ class EnhanceTab(ctk.CTkFrame):
                 self.after(0, lambda l=lbl: l.configure(
                     text="✗", text_color="#f44336"))
             self.after(0, self._status.busy, f"In corso ({i+1}/{total})…")
-
-        if ok == total:
-            self.after(0, self._status.ok, f"{ok}/{total} migliorati")
         else:
-            first_err = errors[0] if errors else ""
-            self.after(0, self._status.err,
-                       f"{ok}/{total} completati · {total-ok} errori — {first_err}")
-        self.after(0, self._progress.set, 1.0)
+            # Loop completed without break (no cancellation)
+            if ok == total:
+                self.after(0, self._status.ok, f"{ok}/{total} migliorati")
+            else:
+                first_err = errors[0] if errors else ""
+                self.after(0, self._status.err,
+                           f"{ok}/{total} completati · {total-ok} errori — {first_err}")
+            self.after(0, self._progress.set, 1.0)
+
+        self.after(0, lambda: self._btn_cancel.configure(state="disabled"))
         self.after(0, lambda: self._btn_run.configure(state="normal"))

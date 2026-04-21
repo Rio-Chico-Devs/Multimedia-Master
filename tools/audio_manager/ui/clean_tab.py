@@ -43,9 +43,10 @@ class CleanTab(ctk.CTkFrame):
     def __init__(self, parent, engine: AudioEngine, **kw):
         kw.setdefault("fg_color", "transparent")
         super().__init__(parent, **kw)
-        self._engine = engine
+        self._engine       = engine
         self._out_dir: Path | None = None
         self._file_rows: list[tuple[Path, ctk.CTkFrame, ctk.CTkLabel]] = []
+        self._cancel_event = threading.Event()
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -157,12 +158,18 @@ class CleanTab(ctk.CTkFrame):
         bot.grid_columnconfigure(0, weight=1)
         self._status = StatusBar(bot)
         self._status.grid(row=0, column=0, sticky="ew")
+        self._btn_cancel = ctk.CTkButton(
+            bot, text="Annulla",
+            width=90, height=36, state="disabled",
+            fg_color="#5a1a1a", hover_color="#7a2a2a",
+            command=self._cancel)
+        self._btn_cancel.grid(row=0, column=1, padx=(8, 4))
         self._btn_run = ctk.CTkButton(
             bot, text="✨  Pulisci e Converti",
             width=180, height=36,
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._run)
-        self._btn_run.grid(row=0, column=1, padx=(8, 0))
+        self._btn_run.grid(row=0, column=2, padx=(0, 0))
 
     # ── File list ──────────────────────────────────────────────────────────
 
@@ -236,6 +243,13 @@ class CleanTab(ctk.CTkFrame):
             self._out_dir = Path(d)
             self._dir_lbl.configure(text=f"…/{Path(d).name}", text_color="white")
 
+    # ── Cancel ─────────────────────────────────────────────────────────────
+
+    def _cancel(self) -> None:
+        self._cancel_event.set()
+        self._btn_cancel.configure(state="disabled")
+        self._status.busy("Annullamento…")
+
     # ── Run ────────────────────────────────────────────────────────────────
 
     def _run(self) -> None:
@@ -243,24 +257,34 @@ class CleanTab(ctk.CTkFrame):
             self._status.err("Aggiungi almeno un file WAV.")
             return
 
-        preset    = self._preset_var.get()
-        mp3_q     = _MP3_QUALITY[self._quality_var.get()][0]
-        to_mono   = self._mono_var.get()
+        preset          = self._preset_var.get()
+        mp3_q           = _MP3_QUALITY[self._quality_var.get()][0]
+        to_mono         = self._mono_var.get()
+        rows_snapshot   = list(self._file_rows)
 
+        self._cancel_event.clear()
         self._btn_run.configure(state="disabled")
+        self._btn_cancel.configure(state="normal")
         self._progress.set(0)
-        self._status.busy(f"Avvio pulizia (0/{len(self._file_rows)})…")
+        self._status.busy(f"Avvio pulizia (0/{len(rows_snapshot)})…")
         threading.Thread(
-            target=self._worker, args=(preset, mp3_q, to_mono), daemon=True,
+            target=self._worker, args=(preset, mp3_q, to_mono, rows_snapshot),
+            daemon=True,
         ).start()
 
-    def _worker(self, preset: str, mp3_q: int, to_mono: bool) -> None:
+    def _worker(self, preset: str, mp3_q: int, to_mono: bool,
+                rows: list) -> None:
         import sys
-        total  = len(self._file_rows)
+        total  = len(rows)
         ok     = 0
         errors: list[str] = []
 
-        for i, (path, _, lbl) in enumerate(self._file_rows):
+        for i, (path, _, lbl) in enumerate(rows):
+            if self._cancel_event.is_set():
+                self.after(0, self._status.err,
+                           f"Annullato — {ok}/{i} completati")
+                break
+
             out_dir = self._out_dir or path.parent
             output  = out_dir / (path.stem + ".mp3")
 
@@ -292,12 +316,15 @@ class CleanTab(ctk.CTkFrame):
             self.after(0, lambda p=(i + 1) / total: self._progress.set(p))
             self.after(0, self._status.busy,
                        f"In corso ({i+1}/{total})…")
-
-        if ok == total:
-            self.after(0, self._status.ok,
-                       f"{ok}/{total} puliti e salvati in MP3")
         else:
-            first_err = errors[0] if errors else ""
-            self.after(0, self._status.err,
-                       f"{ok}/{total} completati · {total-ok} errori — {first_err}")
+            # Loop completed without break (no cancellation)
+            if ok == total:
+                self.after(0, self._status.ok,
+                           f"{ok}/{total} puliti e salvati in MP3")
+            else:
+                first_err = errors[0] if errors else ""
+                self.after(0, self._status.err,
+                           f"{ok}/{total} completati · {total-ok} errori — {first_err}")
+
+        self.after(0, lambda: self._btn_cancel.configure(state="disabled"))
         self.after(0, lambda: self._btn_run.configure(state="normal"))
