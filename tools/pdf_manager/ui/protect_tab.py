@@ -132,7 +132,7 @@ class ProtectTab(ctk.CTkFrame):
             command=self._run_decrypt)
         self._btn_dec.pack(fill="x", padx=12, pady=(8, 12))
 
-        # Output directory (shared, at bottom)
+        # Output directory + privacy option (shared, at bottom)
         Separator(self).grid(row=2, column=0, sticky="ew", padx=4, pady=(4, 0))
         bot = ctk.CTkFrame(self, fg_color="transparent")
         bot.grid(row=3, column=0, sticky="ew", padx=4, pady=4)
@@ -146,6 +146,14 @@ class ProtectTab(ctk.CTkFrame):
         ctk.CTkButton(bot, text="Sfoglia", width=72, height=26,
                       command=self._browse_dir).grid(row=0, column=2,
                                                      padx=(6, 0))
+
+        self._strip_meta = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            bot,
+            text="🛡 Rimuovi metadati dal PDF di output (autore, software, date)",
+            variable=self._strip_meta,
+            font=ctk.CTkFont(size=11),
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
 
         # Status bar
         self._status = StatusBar(self)
@@ -200,12 +208,14 @@ class ProtectTab(ctk.CTkFrame):
         # the worker thread is unsafe (Tcl/Tk is single-threaded).
         allow_print = self._allow_print.get()
         allow_copy  = self._allow_copy.get()
+        strip_meta  = self._strip_meta.get()
         self._status.busy("Protezione in corso…")
         self.update_idletasks()
 
         threading.Thread(
             target=self._worker_encrypt,
-            args=(pdf, user_pw, owner_pw, output, allow_print, allow_copy),
+            args=(pdf, user_pw, owner_pw, output,
+                  allow_print, allow_copy, strip_meta),
             daemon=True,
         ).start()
 
@@ -220,7 +230,7 @@ class ProtectTab(ctk.CTkFrame):
         )
 
     def _worker_encrypt(self, pdf, user_pw, owner_pw, output,
-                        allow_print, allow_copy):
+                        allow_print, allow_copy, strip_meta):
         try:
             result = self._engine.protect(
                 pdf=pdf,
@@ -229,6 +239,7 @@ class ProtectTab(ctk.CTkFrame):
                 output=output,
                 allow_print=allow_print,
                 allow_copy=allow_copy,
+                strip_meta=strip_meta,
             )
             if result.success:
                 self.after(0, self._status.ok, f"Salvato: {output.name}")
@@ -244,8 +255,9 @@ class ProtectTab(ctk.CTkFrame):
         pdf = self._picker.get_path()
         if not pdf:
             return
-        password = self._unlock_pw.get()
-        output   = self._resolve_output(
+        password   = self._unlock_pw.get()
+        strip_meta = self._strip_meta.get()
+        output     = self._resolve_output(
             self._dec_name.get().strip() or "sbloccato.pdf")
         if not self._confirm_overwrite(output):
             return
@@ -254,13 +266,14 @@ class ProtectTab(ctk.CTkFrame):
 
         threading.Thread(
             target=self._worker_decrypt,
-            args=(pdf, password, output),
+            args=(pdf, password, output, strip_meta),
             daemon=True,
         ).start()
 
-    def _worker_decrypt(self, pdf, password, output):
+    def _worker_decrypt(self, pdf, password, output, strip_meta):
         try:
-            result = self._engine.unlock(pdf, password, output)
+            result = self._engine.unlock(pdf, password, output,
+                                         strip_meta=strip_meta)
             if result.success:
                 self.after(0, self._status.ok, f"Salvato: {output.name}")
                 self.after(0, self._clear_passwords)

@@ -113,8 +113,10 @@ class PdfEngine:
             writer = PdfWriter()
             for img_path in images:
                 with Image.open(img_path) as img:
+                    # timeout: Tesseract può bloccarsi su immagini patologiche —
+                    # 120 s a pagina è ampio per qualsiasi scansione legittima.
                     pdf_bytes = pytesseract.image_to_pdf_or_hocr(
-                        img, extension="pdf", lang=lang)
+                        img, extension="pdf", lang=lang, timeout=120)
                 reader = PdfReader(io.BytesIO(pdf_bytes))
                 for page in reader.pages:
                     writer.add_page(page)
@@ -126,6 +128,12 @@ class PdfEngine:
             return PdfResult(
                 output=output, success=False,
                 error="OCR non disponibile: installa pytesseract e Tesseract OCR.")
+        except RuntimeError as exc:
+            if "timeout" in str(exc).lower():
+                return PdfResult(
+                    output=output, success=False,
+                    error="OCR interrotto: timeout (120 s) superato su un'immagine.")
+            return PdfResult(output=output, success=False, error=str(exc))
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))
 
@@ -228,6 +236,7 @@ class PdfEngine:
         output:       Path,
         allow_print:  bool = True,
         allow_copy:   bool = False,
+        strip_meta:   bool = False,
     ) -> PdfResult:
         """Encrypt a PDF with AES-256."""
         try:
@@ -236,6 +245,8 @@ class PdfEngine:
             reader = PdfReader(str(pdf))
             writer = PdfWriter()
             writer.clone_reader_document_root(reader)
+            if strip_meta:
+                self._strip_writer_metadata(writer)
 
             # Build permission flags (PDF spec bit positions)
             perms = 0
@@ -254,7 +265,8 @@ class PdfEngine:
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))
 
-    def unlock(self, pdf: Path, password: str, output: Path) -> PdfResult:
+    def unlock(self, pdf: Path, password: str, output: Path,
+               strip_meta: bool = False) -> PdfResult:
         """Remove password protection from a PDF."""
         try:
             from pypdf import PdfReader, PdfWriter
@@ -268,11 +280,33 @@ class PdfEngine:
 
             writer = PdfWriter()
             writer.clone_reader_document_root(reader)
+            if strip_meta:
+                self._strip_writer_metadata(writer)
             with open(output, "wb") as f:
                 writer.write(f)
             return self._ok(output)
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))
+
+    @staticmethod
+    def _strip_writer_metadata(writer) -> None:
+        """
+        Privacy: drop the /Info dictionary (author, creator, producer, dates)
+        and the XMP /Metadata stream so the output carries no document-level
+        identifying information.  Best-effort across pypdf versions.
+        """
+        try:
+            writer.metadata = None          # pypdf ≥ 4.1 removes /Info entirely
+        except Exception:
+            try:
+                writer.add_metadata({})     # fallback: empty Info dict
+            except Exception:
+                pass
+        try:
+            if "/Metadata" in writer._root_object:
+                del writer._root_object["/Metadata"]   # XMP stream
+        except Exception:
+            pass
 
     # ── Compress ──────────────────────────────────────────────────────────────
 
