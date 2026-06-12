@@ -26,7 +26,8 @@ from pathlib import Path
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from common.ui.widgets import SectionLabel, Separator, StatusBar
+from common.ui.widgets import (SectionLabel, Separator, StatusBar,
+                               adaptive_wraplength)
 from core.audio_engine import AudioEngine
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS
@@ -369,11 +370,13 @@ class MetadataTab(ctk.CTkFrame):
             self._field_entries[raw_key] = entry
         else:
             val_text = f["value"] if len(f["value"]) <= 90 else f["value"][:87] + "…"
-            ctk.CTkLabel(
+            val_lbl = ctk.CTkLabel(
                 row, text=val_text or "—", anchor="w",
                 font=ctk.CTkFont(size=10), text_color="#888888",
                 wraplength=320, justify="left",
-            ).grid(row=0, column=2, sticky="ew", padx=(0, 4), pady=2)
+            )
+            val_lbl.grid(row=0, column=2, sticky="ew", padx=(0, 4), pady=2)
+            adaptive_wraplength(val_lbl)
 
         # Col 3 — delete button
         if deletable:
@@ -565,7 +568,7 @@ class MetadataTab(ctk.CTkFrame):
         win = ctk.CTkToplevel(self)
         win.title("Analisi file")
         win.geometry("520x340")
-        win.resizable(False, False)
+        win.minsize(420, 280)
         win.grab_set()
         win.configure(fg_color="#1a3a1a" if safe else "#3a1a1a")
         box = ctk.CTkTextbox(win, font=ctk.CTkFont(family="Courier", size=11),

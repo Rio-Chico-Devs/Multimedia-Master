@@ -27,7 +27,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from .editor_canvas import EditorCanvas
-from .widgets       import SectionLabel, StatusBar
+from .widgets       import SectionLabel, StatusBar, adaptive_wraplength
 from core.pdf_editor_engine import PdfEditorEngine
 
 
@@ -71,6 +71,20 @@ class EditTab(ctk.CTkFrame):
         bar = ctk.CTkFrame(self, fg_color=("#1a1a1a", "#1a1a1a"),
                            corner_radius=8)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+
+        # Legend on its own bottom strip: packed side="right" beside the
+        # controls it used to overflow and get clipped on narrow windows.
+        legend = (
+            "✂ Seleziona un'area  ·  "
+            "✥ Trascina i blocchi  ·  "
+            "↕ Trascina su/giù per aggiungere/rimuovere spazio"
+        )
+        legend_lbl = ctk.CTkLabel(bar, text=legend, text_color="#555",
+                                  font=ctk.CTkFont(size=10),
+                                  anchor="w", justify="left",
+                                  wraplength=700)
+        legend_lbl.pack(side="bottom", fill="x", padx=12, pady=(0, 6))
+        adaptive_wraplength(legend_lbl, margin=24)
 
         # Open button
         ctk.CTkButton(bar, text="📂  Apri PDF", width=110, height=30,
@@ -133,16 +147,6 @@ class EditTab(ctk.CTkFrame):
                                         hover_color="#3a3a3a",
                                         command=self._undo)
         self._btn_undo.pack(side="left", padx=2)
-
-        # Legend (right side)
-        legend = (
-            "✂ Seleziona un'area  ·  "
-            "✥ Trascina i blocchi  ·  "
-            "↕ Trascina su/giù per aggiungere/rimuovere spazio"
-        )
-        ctk.CTkLabel(bar, text=legend, text_color="#555",
-                     font=ctk.CTkFont(size=10)).pack(
-            side="right", padx=12)
 
     def _mode_btn(self, parent, label: str, mode: str) -> ctk.CTkButton:
         return ctk.CTkButton(

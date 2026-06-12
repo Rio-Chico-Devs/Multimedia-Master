@@ -7,7 +7,7 @@ from core.formats import (
     NO_QUALITY_FORMATS, ConversionConfig,
 )
 from core.profiles import PROFILE_NAMES, get_profile
-from ui.widgets import SectionLabel, Separator
+from ui.widgets import SectionLabel, Separator, adaptive_wraplength
 
 
 class SettingsSidebar(ctk.CTkScrollableFrame):
@@ -73,6 +73,7 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
             anchor="w", wraplength=220, justify="left",
         )
         self._profile_hint.pack(fill="x", padx=18, pady=(0, 4))
+        adaptive_wraplength(self._profile_hint)
 
     def _build_format(self) -> None:
         SectionLabel(self, text="Formato output").pack(
@@ -102,6 +103,7 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
             anchor="w", wraplength=220, justify="left",
         )
         self._quality_hint.pack(fill="x", padx=18, pady=(2, 6))
+        adaptive_wraplength(self._quality_hint)
 
     def _build_resize(self) -> None:
         SectionLabel(self, text="Ridimensiona  (opzionale)").pack(
@@ -152,6 +154,7 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
             anchor="w", wraplength=220, justify="left",
         )
         self._outdir_lbl.pack(fill="x", padx=18, pady=(0, 4))
+        adaptive_wraplength(self._outdir_lbl)
 
         ctk.CTkButton(self, text="Scegli cartella…", height=30,
                       command=self._choose_dir).pack(fill="x", padx=18, pady=(0, 4))

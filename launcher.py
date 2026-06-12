@@ -8,6 +8,7 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "tools"))
 from common.version import __version__
 from common.ui.geometry import fit_window
+from common.ui.widgets import adaptive_wraplength
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -33,10 +34,12 @@ class _ToolCard(ctk.CTkFrame):
                      font=ctk.CTkFont(size=15, weight="bold")).pack()
 
         feat_text = "  ·  ".join(features)
-        ctk.CTkLabel(self, text=feat_text,
-                     text_color="#666",
-                     font=ctk.CTkFont(size=10),
-                     wraplength=170, justify="center").pack(pady=(6, 22))
+        feat_lbl = ctk.CTkLabel(self, text=feat_text,
+                                text_color="#666",
+                                font=ctk.CTkFont(size=10),
+                                wraplength=170, justify="center")
+        feat_lbl.pack(fill="x", padx=12, pady=(6, 22))
+        adaptive_wraplength(feat_lbl, margin=24)
 
         self._bind_all(on_click)
 

@@ -6,6 +6,7 @@ from typing import Callable
 
 from core.formats import INPUT_EXTS
 from ui.file_row import FileRow
+from ui.widgets import adaptive_wraplength
 
 
 class FileListPanel(ctk.CTkFrame):
@@ -156,16 +157,20 @@ class FileListPanel(ctk.CTkFrame):
         self._cancel_btn.grid(row=0, column=2, sticky="e")
 
         self._status_lbl = ctk.CTkLabel(bar, text="", text_color="gray",
-                                        font=ctk.CTkFont(size=11))
-        self._status_lbl.pack(pady=(4, 0))
+                                        font=ctk.CTkFont(size=11),
+                                        wraplength=420, justify="left")
+        self._status_lbl.pack(fill="x", pady=(4, 0))
+        adaptive_wraplength(self._status_lbl)
 
-        ctk.CTkLabel(
+        hint = ctk.CTkLabel(
             bar,
             text="🛡 Pulisci metadati: crea una copia *_clean senza EXIF/GPS — "
                  "qualità identica (lossless per JPG e PNG), originale intatto.",
             text_color="#4a7a5a", font=ctk.CTkFont(size=10),
             wraplength=420, justify="left",
-        ).pack(pady=(2, 0))
+        )
+        hint.pack(fill="x", pady=(2, 0))
+        adaptive_wraplength(hint)
 
     # ── Internal ───────────────────────────────────────────────────────────────
 

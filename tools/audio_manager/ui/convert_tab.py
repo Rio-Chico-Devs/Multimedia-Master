@@ -15,7 +15,8 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from common.ui.widgets import SectionLabel, Separator, StatusBar
+from common.ui.widgets import (SectionLabel, Separator, StatusBar,
+                               adaptive_wraplength)
 from core.audio_engine import AudioEngine
 from core.formats import AUDIO_FORMATS, PRESETS, AUDIO_EXTS
 
@@ -94,6 +95,7 @@ class ConvertTab(ctk.CTkFrame):
             text_color="#777", font=ctk.CTkFont(size=10),
             anchor="w", wraplength=200, justify="left")
         self._preset_desc.pack(fill="x", padx=16, pady=(4, 8))
+        adaptive_wraplength(self._preset_desc)
 
         Separator(right).pack()
 

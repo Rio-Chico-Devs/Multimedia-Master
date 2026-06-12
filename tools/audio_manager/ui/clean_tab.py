@@ -17,7 +17,8 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from common.ui.widgets import SectionLabel, Separator, StatusBar
+from common.ui.widgets import (SectionLabel, Separator, StatusBar,
+                               adaptive_wraplength)
 from core.audio_engine import AudioEngine
 
 
@@ -106,6 +107,7 @@ class CleanTab(ctk.CTkFrame):
             text_color="#777", font=ctk.CTkFont(size=10),
             anchor="w", justify="left", wraplength=220)
         self._preset_hint.pack(fill="x", padx=16, pady=(6, 8))
+        adaptive_wraplength(self._preset_hint)
 
         Separator(right).pack()
 

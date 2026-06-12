@@ -11,7 +11,8 @@ from pathlib import Path
 import customtkinter as ctk
 
 from .file_widgets import SingleFilePicker
-from .widgets      import SectionLabel, Separator, StatusBar
+from .widgets      import (SectionLabel, Separator, StatusBar,
+                           adaptive_wraplength)
 from core.pdf_engine import PdfEngine
 
 
@@ -70,12 +71,14 @@ class SplitTab(ctk.CTkFrame):
 
         SectionLabel(right, "Dividi ogni N pagine").pack(
             fill="x", pady=(0, 4))
-        ctk.CTkLabel(right,
-                     text="Ogni parte conterrà al massimo N pagine.",
-                     text_color="gray",
-                     font=ctk.CTkFont(size=10),
-                     anchor="w",
-                     wraplength=200).pack(fill="x", pady=(0, 6))
+        n_hint = ctk.CTkLabel(right,
+                              text="Ogni parte conterrà al massimo N pagine.",
+                              text_color="gray",
+                              font=ctk.CTkFont(size=10),
+                              anchor="w",
+                              wraplength=200)
+        n_hint.pack(fill="x", pady=(0, 6))
+        adaptive_wraplength(n_hint)
 
         n_row = ctk.CTkFrame(right, fg_color="transparent")
         n_row.pack(fill="x", pady=(0, 8))

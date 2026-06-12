@@ -45,3 +45,30 @@ class StatusBar(ctk.CTkLabel):
     def info(self, msg: str) -> None: self.configure(text=msg,          text_color="gray")
     def busy(self, msg: str) -> None: self.configure(text=f"⏳  {msg}", text_color="#aaa")
     def clear(self)          -> None: self.configure(text="")
+
+
+def adaptive_wraplength(label: ctk.CTkLabel, margin: int = 16) -> None:
+    """
+    Keep a CTkLabel's wraplength in sync with its real width, so the text
+    reflows when the window is resized — no more clipping on small screens
+    and no narrow text column when maximised.
+
+    The label must be laid out with fill="x" / sticky="ew" so its width
+    tracks the container.
+    """
+    def _on_resize(event) -> None:
+        w = event.width
+        try:
+            # CTk scales wraplength by the widget DPI factor on configure();
+            # event.width is physical px, so reverse the scaling first.
+            rev = getattr(label, "_reverse_widget_scaling", None)
+            if rev is not None:
+                w = rev(w)
+            w = max(80, int(w) - margin)
+            current = int(label.cget("wraplength") or 0)
+            if abs(w - current) > 10:        # avoid resize feedback loops
+                label.configure(wraplength=w)
+        except Exception:
+            pass
+
+    label.bind("<Configure>", _on_resize, add="+")
