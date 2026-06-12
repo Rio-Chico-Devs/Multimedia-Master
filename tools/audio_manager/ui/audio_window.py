@@ -37,7 +37,9 @@ class AudioWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"Audio Manager — Multimedia Master  v{__version__}")
-        fit_window(self, 960, 700, 760, 520)
+        # min height 560: below that the Modifica tab's fixed rows (picker,
+        # waveform, playback, preview) leave zero space to the edit sections.
+        fit_window(self, 960, 700, 760, 560)
 
         self._engine = AudioEngine()
         self._deps   = check_deps()

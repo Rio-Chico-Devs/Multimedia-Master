@@ -22,7 +22,9 @@ class MainWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"Multimedia Master  —  Convertitore Immagini  v{__version__}")
-        fit_window(self, 980, 760, 720, 500)
+        # min height 540: drop zone + bottom bar + preview strip are fixed,
+        # below that the file list would collapse to nothing.
+        fit_window(self, 980, 760, 720, 540)
 
         self._converter    = ImageConverter()
         self._cleaner      = MetadataCleaner()
