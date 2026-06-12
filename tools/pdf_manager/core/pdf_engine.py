@@ -245,7 +245,7 @@ class PdfEngine:
             writer.encrypt(
                 user_password=user_pw,
                 owner_password=owner_pw or user_pw,
-                algorithm="AES-256-R5",
+                algorithm="AES-256",   # R6, PDF 2.0 standard (R5 è una bozza deprecata)
                 permissions_flag=perms if perms else -4,
             )
             with open(output, "wb") as f:

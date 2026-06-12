@@ -1,34 +1,37 @@
+# Versions use compatible ranges (>=min,<next-major) so a pip upgrade
+# can never silently pull in a release with breaking API changes.
+
 # ── UI framework ──────────────────────────────────────────────────────────────
-customtkinter>=5.2.0
+customtkinter>=5.2.0,<6
 
 # ── Image processing ──────────────────────────────────────────────────────────
-Pillow>=10.0.0
+Pillow>=10.0.0,<12
 
 # ── Drag & drop (optional, graceful fallback if not installed) ────────────────
-tkinterdnd2>=0.3.0
+tkinterdnd2>=0.3.0,<1
 
 # ── PDF operations ────────────────────────────────────────────────────────────
-pypdf>=4.0.0          # merge, split, encrypt, form fields
-reportlab>=4.0.0      # create PDF from images (no OCR path)
+pypdf>=4.0.0,<6           # merge, split, encrypt, form fields
+reportlab>=4.0.0,<5       # create PDF from images (no OCR path)
 
 # ── PDF visual editor — render pages as images for the Modifica tab ──────────
-pymupdf>=1.23.0        # pip install pymupdf  (also known as fitz)
+pymupdf>=1.23.0,<2        # pip install pymupdf  (also known as fitz)
 
 # ── PDF text extraction (optional, better layout than pypdf) ──────────────────
-pdfplumber>=0.10.0
+pdfplumber>=0.10.0,<1
 
 # ── OCR — searchable PDF (optional, also needs Tesseract binary installed) ────
 # pytesseract>=0.3.10
 
 # ── Audio Manager ─────────────────────────────────────────────────────────────
-pydub>=0.25.1           # audio manipulation
-imageio-ffmpeg>=0.4.9   # ffmpeg bundled — nessuna installazione manuale necessaria
-soundfile>=0.12.1       # lossless audio read/write (WAV, FLAC, OGG)
-noisereduce>=3.0.0      # spectral gating noise reduction
-numpy>=1.26.0           # array operations (shared dep)
-scipy>=1.12.0           # Butterworth EQ filters
-mutagen>=1.47.0         # ID3 / Vorbis / MP4 / FLAC tag read+write
-sounddevice>=0.4.6      # riproduzione audio nel tab "Modifica" (PortAudio, stabile su Windows)
+pydub>=0.25.1,<1           # audio manipulation
+imageio-ffmpeg>=0.4.9,<1   # ffmpeg bundled — nessuna installazione manuale necessaria
+soundfile>=0.12.1,<1       # lossless audio read/write (WAV, FLAC, OGG)
+noisereduce>=3.0.0,<4      # spectral gating noise reduction
+numpy>=1.26.0,<3           # array operations (shared dep)
+scipy>=1.12.0,<2           # Butterworth EQ filters
+mutagen>=1.47.0,<2         # ID3 / Vorbis / MP4 / FLAC tag read+write
+sounddevice>=0.4.6,<1      # riproduzione audio nel tab "Modifica" (PortAudio, stabile su Windows)
 # simpleaudio>=1.0.4   # rimosso: crasha su Windows con WinMM quando stop+play ravvicinati
 
 # ── Stem separation (optional — ~2 GB, requires PyTorch first) ────────────────

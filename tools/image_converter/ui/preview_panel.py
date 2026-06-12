@@ -84,6 +84,7 @@ class PreviewPanel(ctk.CTkFrame):
         try:
             pil = Image.open(path)
             orig_w, orig_h = pil.size
+            pil.draft("RGB", (self._MAX * 2, self._MAX * 2))  # fast JPEG decode
             pil.thumbnail((self._MAX, self._MAX), Image.LANCZOS)
             img = ctk.CTkImage(pil, size=(pil.width, pil.height))
 

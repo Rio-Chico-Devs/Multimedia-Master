@@ -4,10 +4,12 @@ from pathlib import Path
 
 import customtkinter as ctk
 
+ROOT = Path(__file__).parent
+sys.path.insert(0, str(ROOT / "tools"))
+from common.version import __version__
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
-
-ROOT = Path(__file__).parent
 
 
 # ── Card cliccabile ────────────────────────────────────────────────────────────
@@ -101,7 +103,8 @@ class Launcher(ctk.CTk):
             on_click=self._launch_audio_manager,
         ).grid(row=0, column=2, sticky="nsew", padx=(8, 0))
 
-        ctk.CTkLabel(self, text="v2.0  ·  open source  ·  nessuna connessione richiesta",
+        ctk.CTkLabel(self,
+                     text=f"v{__version__}  ·  open source  ·  nessuna connessione richiesta",
                      text_color="#333",
                      font=ctk.CTkFont(size=10)).pack(side="bottom", pady=10)
 
@@ -110,11 +113,31 @@ class Launcher(ctk.CTk):
     def _launch(self, tool_name: str) -> None:
         script = ROOT / "tools" / tool_name / "app.py"
         tool_dir = script.parent
-        proc = subprocess.Popen(
-            [sys.executable, str(script)],
-            cwd=str(tool_dir),
-        )
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, str(script)],
+                cwd=str(tool_dir),
+            )
+        except OSError as exc:
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Avvio fallito",
+                f"Impossibile avviare {tool_name}:\n{exc}")
+            return
         self._processes.append(proc)
+        # If the tool dies within 2 s it crashed at import time —
+        # tell the user instead of failing silently.
+        self.after(2000, self._check_alive, proc, tool_name)
+
+    def _check_alive(self, proc: subprocess.Popen, tool_name: str) -> None:
+        rc = proc.poll()
+        if rc is not None and rc != 0:
+            from tkinter import messagebox
+            log = ROOT / "tools" / tool_name / "crash.log"
+            messagebox.showerror(
+                "Strumento terminato",
+                f"{tool_name} si è chiuso subito (codice {rc}).\n\n"
+                f"Controlla il log:\n{log}")
 
     def _launch_image_converter(self) -> None:
         self._launch("image_converter")

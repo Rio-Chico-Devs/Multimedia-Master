@@ -2,7 +2,9 @@ import threading
 import customtkinter as ctk
 from tkinter import messagebox
 
+from common.version import __version__
 from core.converter import ImageConverter
+from core.metadata_cleaner import MetadataCleaner
 from ui.file_list import FileListPanel
 from ui.file_row import FileRow
 from ui.sidebar import SettingsSidebar
@@ -18,12 +20,14 @@ class MainWindow(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Multimedia Master  —  Convertitore Immagini")
+        self.title(f"Multimedia Master  —  Convertitore Immagini  v{__version__}")
         self.geometry("980x760")
         self.minsize(740, 560)
 
-        self._converter  = ImageConverter()
-        self._converting = False
+        self._converter    = ImageConverter()
+        self._cleaner      = MetadataCleaner()
+        self._converting   = False
+        self._cancel_event = threading.Event()
 
         self._init_dnd()
         self._build_ui()
@@ -40,8 +44,9 @@ class MainWindow(ctk.CTk):
             self.tk.call("tkdnd::drop_target", "register", self._w, DND_FILES)
             self.bind("<<Drop>>", self._on_window_drop)
             self._dnd_available = True
-        except Exception:
-            pass   # app works fine without drag & drop
+        except Exception as exc:
+            import sys
+            print(f"[INFO] Drag&drop non disponibile: {exc}", file=sys.stderr)
 
     def _on_window_drop(self, event) -> None:
         """Forward window-level drops to the file panel."""
@@ -59,6 +64,8 @@ class MainWindow(ctk.CTk):
         self._file_panel = FileListPanel(
             self,
             on_convert=self._start_conversion,
+            on_clean=self._start_cleaning,
+            on_cancel=self._cancel,
             on_select=self._on_row_selected,
         )
         self._file_panel.grid(
@@ -83,25 +90,37 @@ class MainWindow(ctk.CTk):
         else:
             self._preview.show_source(row.file_path)
 
-    # ── Conversion orchestration ───────────────────────────────────────────────
+    # ── Shared batch helpers ───────────────────────────────────────────────────
 
-    def _start_conversion(self) -> None:
+    def _begin_batch(self) -> list[FileRow] | None:
+        """Common pre-flight for convert/clean. Returns rows or None."""
         if self._converting:
-            return
+            return None
         rows = self._file_panel.rows
         if not rows:
             messagebox.showwarning(
                 "Nessun file",
-                "Aggiungi almeno un'immagine prima di convertire.",
+                "Aggiungi almeno un'immagine prima di procedere.",
             )
-            return
-
-        config = self._sidebar.get_config()
+            return None
         self._converting = True
+        self._cancel_event.clear()
         self._file_panel.set_converting(True)
         self._file_panel.set_progress(0)
         self._file_panel.set_progress_color("#1f6aa5")
+        return rows
 
+    def _cancel(self) -> None:
+        self._cancel_event.set()
+        self._file_panel.set_status("Annullamento dopo il file corrente…")
+
+    # ── Conversion orchestration ───────────────────────────────────────────────
+
+    def _start_conversion(self) -> None:
+        rows = self._begin_batch()
+        if rows is None:
+            return
+        config = self._sidebar.get_config()   # read tk vars on main thread
         threading.Thread(
             target=self._run_conversion,
             args=(rows, config),
@@ -109,42 +128,119 @@ class MainWindow(ctk.CTk):
         ).start()
 
     def _run_conversion(self, rows, config) -> None:
-        total = len(rows)
-        ok    = 0
+        import sys
+        total     = len(rows)
+        ok        = 0
+        cancelled = False
 
         for i, row in enumerate(rows):
-            row.set_status("⏳", "#aaaaaa")
+            if self._cancel_event.is_set():
+                cancelled = True
+                break
+            # ALL widget updates go through after() — tkinter is not
+            # thread-safe and direct calls from here crash on Windows.
+            self.after(0, row.set_status, "⏳", "#aaaaaa")
+            self.after(0, self._file_panel.set_status,
+                       f"({i + 1}/{total})  {row.file_path.name}")
+
             result = self._converter.convert(row.file_path, config)
-            row.apply_result(result)
+
+            self.after(0, row.apply_result, result)
+            if result.success:
+                ok += 1
+                self.after(0, self._refresh_preview_if_selected, row)
+            else:
+                print(f"[ERRORE] {row.file_path.name}: {result.error}",
+                      file=sys.stderr)
+            self.after(0, self._file_panel.set_progress, (i + 1) / total)
+
+        self.after(0, self._on_batch_done, ok, total,
+                   "convertite", cancelled)
+
+    # ── Metadata cleaning orchestration ────────────────────────────────────────
+
+    def _start_cleaning(self) -> None:
+        rows = self._begin_batch()
+        if rows is None:
+            return
+        out_dir = self._sidebar.get_config().output_dir   # main thread
+        threading.Thread(
+            target=self._run_cleaning,
+            args=(rows, out_dir),
+            daemon=True,
+        ).start()
+
+    def _run_cleaning(self, rows, out_dir) -> None:
+        import sys
+        total     = len(rows)
+        ok        = 0
+        cancelled = False
+        removed_counts: dict[str, int] = {}
+
+        for i, row in enumerate(rows):
+            if self._cancel_event.is_set():
+                cancelled = True
+                break
+            self.after(0, row.set_status, "⏳", "#aaaaaa")
+            self.after(0, self._file_panel.set_status,
+                       f"Pulizia ({i + 1}/{total})  {row.file_path.name}")
+
+            src    = row.file_path
+            target = (out_dir or src.parent)
+            output = self._unique_clean_path(target, src)
+            result = self._cleaner.clean(src, output)
 
             if result.success:
                 ok += 1
-                # If this row is currently selected, refresh the preview
-                self.after(0, self._refresh_preview_if_selected, row)
+                for label in result.removed:
+                    removed_counts[label] = removed_counts.get(label, 0) + 1
+                tag = "🛡 pulita" if result.removed else "🛡 già pulita"
+                self.after(0, row.set_status, tag, "#4caf50")
             else:
-                print(f"[ERRORE] {row.file_path.name}: {result.error}")
-
+                print(f"[ERRORE] {src.name}: {result.error}", file=sys.stderr)
+                self.after(0, row.set_status, "✗ errore", "#f44336")
             self.after(0, self._file_panel.set_progress, (i + 1) / total)
 
-        self.after(0, self._on_conversion_done, ok, total)
+        summary = ""
+        if removed_counts:
+            parts = [f"{label} ({n})" for label, n in
+                     sorted(removed_counts.items(), key=lambda kv: -kv[1])]
+            summary = "  ·  rimossi: " + ", ".join(parts)
+        self.after(0, self._on_batch_done, ok, total,
+                   "pulite" + summary, cancelled)
+
+    @staticmethod
+    def _unique_clean_path(directory, src):
+        path = directory / f"{src.stem}_clean{src.suffix}"
+        counter = 1
+        while path.exists():
+            path = directory / f"{src.stem}_clean_{counter}{src.suffix}"
+            counter += 1
+        return path
+
+    # ── Batch completion ───────────────────────────────────────────────────────
 
     def _refresh_preview_if_selected(self, row: FileRow) -> None:
         if row.result:
             self._preview.show_result(row.result)
 
-    def _on_conversion_done(self, ok: int, total: int) -> None:
+    def _on_batch_done(self, ok: int, total: int,
+                       verb: str, cancelled: bool) -> None:
         self._converting = False
         self._file_panel.set_converting(False)
 
-        if ok == total and total > 0:
+        if cancelled:
+            color = "#ff9800"
+            msg   = f"⏹ Annullato  ·  {ok} {verb} prima dell'interruzione"
+        elif ok == total and total > 0:
             color = "#4caf50"
-            msg   = f"✓ {ok}/{total} convertite con successo"
+            msg   = f"✓ {ok}/{total} {verb}"
         elif ok > 0:
             color = "#ff9800"
-            msg   = f"✓ {ok}/{total} convertite  ·  {total - ok} con errori"
+            msg   = f"✓ {ok}/{total} {verb}  ·  {total - ok} con errori"
         else:
             color = "#f44336"
-            msg   = "Nessun file convertito — controlla gli errori."
+            msg   = "Nessun file elaborato — controlla gli errori."
 
         self._file_panel.set_progress_color(color)
         self._file_panel.set_status(msg)

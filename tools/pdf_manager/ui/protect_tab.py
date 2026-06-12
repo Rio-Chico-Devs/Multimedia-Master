@@ -194,24 +194,41 @@ class ProtectTab(ctk.CTkFrame):
             return
 
         output = self._resolve_output(self._enc_name.get().strip() or "protetto.pdf")
+        if not self._confirm_overwrite(output):
+            return
+        # Capture EVERY tk variable on the main thread — reading them from
+        # the worker thread is unsafe (Tcl/Tk is single-threaded).
+        allow_print = self._allow_print.get()
+        allow_copy  = self._allow_copy.get()
         self._status.busy("Protezione in corso…")
         self.update_idletasks()
 
         threading.Thread(
             target=self._worker_encrypt,
-            args=(pdf, user_pw, owner_pw, output),
+            args=(pdf, user_pw, owner_pw, output, allow_print, allow_copy),
             daemon=True,
         ).start()
 
-    def _worker_encrypt(self, pdf, user_pw, owner_pw, output):
+    def _confirm_overwrite(self, output: Path) -> bool:
+        if not output.exists():
+            return True
+        from tkinter import messagebox
+        return messagebox.askyesno(
+            "Sovrascrivere?",
+            f"Il file esiste già:\n{output.name}\n\nSovrascrivere?",
+            icon="warning",
+        )
+
+    def _worker_encrypt(self, pdf, user_pw, owner_pw, output,
+                        allow_print, allow_copy):
         try:
             result = self._engine.protect(
                 pdf=pdf,
                 user_pw=user_pw,
                 owner_pw=owner_pw,
                 output=output,
-                allow_print=self._allow_print.get(),
-                allow_copy=self._allow_copy.get(),
+                allow_print=allow_print,
+                allow_copy=allow_copy,
             )
             if result.success:
                 self.after(0, self._status.ok, f"Salvato: {output.name}")
@@ -230,6 +247,8 @@ class ProtectTab(ctk.CTkFrame):
         password = self._unlock_pw.get()
         output   = self._resolve_output(
             self._dec_name.get().strip() or "sbloccato.pdf")
+        if not self._confirm_overwrite(output):
+            return
         self._status.busy("Rimozione protezione…")
         self.update_idletasks()
 

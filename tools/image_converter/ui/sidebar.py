@@ -131,10 +131,17 @@ class SettingsSidebar(ctk.CTkFrame):
     def _build_options(self) -> None:
         SectionLabel(self, text="Opzioni").pack(fill="x", padx=18, pady=(10, 4))
         self._strip_var = ctk.BooleanVar(value=True)
-        ctk.CTkCheckBox(self, text="Rimuovi metadati EXIF",
+        ctk.CTkCheckBox(self, text="Rimuovi metadati (EXIF/GPS)",
                         variable=self._strip_var,
                         command=self._on_manual_change).pack(
             fill="x", padx=18, pady=2)
+        ctk.CTkLabel(
+            self,
+            text="L'orientamento viene sempre applicato ai pixel,\n"
+                 "quindi le foto non escono mai ruotate male.",
+            text_color="gray", font=ctk.CTkFont(size=10),
+            anchor="w", justify="left",
+        ).pack(fill="x", padx=18, pady=(0, 4))
 
     def _build_output_dir(self) -> None:
         SectionLabel(self, text="Cartella output").pack(

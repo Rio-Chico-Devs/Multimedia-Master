@@ -17,11 +17,15 @@ class FileListPanel(ctk.CTkFrame):
         self,
         parent,
         on_convert: Callable,
+        on_clean:   Callable | None = None,
+        on_cancel:  Callable | None = None,
         on_select:  Callable | None = None,
         **kw,
     ):
         super().__init__(parent, **kw)
         self._on_convert = on_convert
+        self._on_clean   = on_clean    # metadata-strip batch (privacy mode)
+        self._on_cancel  = on_cancel   # abort the running batch
         self._on_select  = on_select   # called with FileRow when a row is clicked
         self._rows: list[FileRow] = []
         self._selected: FileRow | None = None
@@ -64,9 +68,11 @@ class FileListPanel(ctk.CTkFrame):
         self._status_lbl.configure(text=text)
 
     def set_converting(self, active: bool) -> None:
-        text = "⏳  Conversione in corso…" if active else "▶  Converti tutto"
+        text = "⏳  Elaborazione in corso…" if active else "▶  Converti tutto"
         state = "disabled" if active else "normal"
         self._convert_btn.configure(text=text, state=state)
+        self._clean_btn.configure(state=state)
+        self._cancel_btn.configure(state="normal" if active else "disabled")
 
     # ── Build ──────────────────────────────────────────────────────────────────
 
@@ -120,16 +126,45 @@ class FileListPanel(ctk.CTkFrame):
         self._progress.pack(fill="x", pady=(0, 8))
         self._progress.set(0)
 
+        btns = ctk.CTkFrame(bar, fg_color="transparent")
+        btns.pack(fill="x")
+        btns.grid_columnconfigure(0, weight=3)
+        btns.grid_columnconfigure(1, weight=2)
+        btns.grid_columnconfigure(2, weight=0)
+
         self._convert_btn = ctk.CTkButton(
-            bar, text="▶  Converti tutto", height=44,
+            btns, text="▶  Converti tutto", height=44,
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self._on_convert,
         )
-        self._convert_btn.pack(fill="x")
+        self._convert_btn.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+
+        self._clean_btn = ctk.CTkButton(
+            btns, text="🛡  Pulisci metadati", height=44,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            fg_color="#1a4a2a", hover_color="#226636",
+            command=lambda: self._on_clean and self._on_clean(),
+        )
+        self._clean_btn.grid(row=0, column=1, sticky="ew", padx=(0, 6))
+
+        self._cancel_btn = ctk.CTkButton(
+            btns, text="⏹", width=52, height=44, state="disabled",
+            fg_color="#5a1a1a", hover_color="#7a2a2a",
+            command=lambda: self._on_cancel and self._on_cancel(),
+        )
+        self._cancel_btn.grid(row=0, column=2, sticky="e")
 
         self._status_lbl = ctk.CTkLabel(bar, text="", text_color="gray",
                                         font=ctk.CTkFont(size=11))
         self._status_lbl.pack(pady=(4, 0))
+
+        ctk.CTkLabel(
+            bar,
+            text="🛡 Pulisci metadati: crea una copia *_clean senza EXIF/GPS — "
+                 "qualità identica (lossless per JPG e PNG), originale intatto.",
+            text_color="#4a7a5a", font=ctk.CTkFont(size=10),
+            wraplength=420, justify="left",
+        ).pack(pady=(2, 0))
 
     # ── Internal ───────────────────────────────────────────────────────────────
 

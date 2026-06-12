@@ -62,7 +62,20 @@ class FileRow(ctk.CTkFrame):
     # ── Build ──────────────────────────────────────────────────────────────────
 
     def _build(self, on_remove) -> None:
-        self._add_thumbnail()
+        # Open the image ONCE: header gives dimensions for free, draft()
+        # lets JPEG decode at reduced scale (~8× faster for big photos).
+        self._dims = ""
+        s = self.THUMB_SIZE
+        pil = None
+        try:
+            pil = Image.open(self.file_path)
+            self._dims = f"{pil.width}×{pil.height} px"
+            pil.draft("RGB", (s * 2, s * 2))   # no-op for non-JPEG
+            pil.thumbnail((s, s), Image.LANCZOS)
+        except Exception:
+            pil = None
+
+        self._add_thumbnail(pil)
         self._add_info()
 
         self._status_lbl = ctk.CTkLabel(self, text="", width=80,
@@ -80,15 +93,13 @@ class FileRow(ctk.CTkFrame):
         for child in self.winfo_children():
             child.bind("<Button-1>", self._on_click)
 
-    def _add_thumbnail(self) -> None:
+    def _add_thumbnail(self, pil: Image.Image | None) -> None:
         s = self.THUMB_SIZE
-        try:
-            pil = Image.open(self.file_path)
-            pil.thumbnail((s, s), Image.LANCZOS)
+        if pil is not None:
             self._thumb = ctk.CTkImage(pil, size=(min(s, pil.width), min(s, pil.height)))
             ctk.CTkLabel(self, image=self._thumb, text="").pack(
                 side="left", padx=(10, 6), pady=8)
-        except Exception:
+        else:
             ctk.CTkLabel(self, text="🖼", font=ctk.CTkFont(size=22), width=s).pack(
                 side="left", padx=(10, 6), pady=8)
 
@@ -111,16 +122,8 @@ class FileRow(ctk.CTkFrame):
         size_b   = self.file_path.stat().st_size
         size_str = (f"{size_b / 1024:.0f} KB" if size_b < 1_048_576
                     else f"{size_b / 1_048_576:.2f} MB")
-        fmt  = self.file_path.suffix[1:].upper()
-        dims = self._get_dims()
-        return f"{size_str}  ·  {fmt}  ·  {dims}"
-
-    def _get_dims(self) -> str:
-        try:
-            w, h = Image.open(self.file_path).size
-            return f"{w}×{h} px"
-        except Exception:
-            return ""
+        fmt = self.file_path.suffix[1:].upper()
+        return f"{size_str}  ·  {fmt}  ·  {self._dims}"
 
     def _on_click(self, _event=None) -> None:
         if self._on_select:

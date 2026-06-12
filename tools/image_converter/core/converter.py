@@ -1,7 +1,11 @@
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 
 from core.formats import ConversionConfig, ConversionResult, EXT_MAP
+
+# Hard ceiling against decompression bombs (PIL default only warns).
+# 250 MP covers any legitimate photo; beyond that Image.open raises.
+Image.MAX_IMAGE_PIXELS = 250_000_000
 
 
 class ImageConverter:
@@ -21,12 +25,20 @@ class ImageConverter:
 
         try:
             img = Image.open(source)
-            icc = img.info.get("icc_profile")   # preserve color profile
+            # Bake EXIF orientation into the pixels BEFORE any processing —
+            # otherwise phone photos come out sideways once EXIF is dropped.
+            img = ImageOps.exif_transpose(img)
+            icc  = img.info.get("icc_profile")   # color profile
+            exif = img.info.get("exif")          # raw EXIF bytes (post-transpose)
 
             img = self._normalize_mode(img, fmt)
             img = self._resize(img, config)
 
             kw = self._save_kwargs(fmt, config.quality, icc, config.strip_meta)
+            # Honour the metadata toggle for real: when the user UNchecks
+            # "remove metadata", carry the original EXIF into the output.
+            if exif and not config.strip_meta and fmt in ("JPEG", "WebP", "TIFF", "PNG"):
+                kw["exif"] = exif
             img.save(out_path, format=fmt, **kw)
 
             return ConversionResult(
