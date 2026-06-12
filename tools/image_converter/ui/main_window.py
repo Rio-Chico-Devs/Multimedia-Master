@@ -116,11 +116,34 @@ class MainWindow(ctk.CTk):
 
     # ── Conversion orchestration ───────────────────────────────────────────────
 
+    _ANIMATED_EXTS    = frozenset({".gif", ".webp"})
+    _ANIMATED_FMT_OUT = frozenset({"GIF", "WebP"})
+
     def _start_conversion(self) -> None:
         rows = self._begin_batch()
         if rows is None:
             return
         config = self._sidebar.get_config()   # read tk vars on main thread
+
+        # Warn if any animated source is being converted to a static format.
+        if config.format not in self._ANIMATED_FMT_OUT:
+            animated = [r.file_path for r in rows
+                        if r.file_path.suffix.lower() in self._ANIMATED_EXTS]
+            if animated:
+                names = "\n".join(f"  · {p.name}" for p in animated[:5])
+                if len(animated) > 5:
+                    names += f"\n  … e altri {len(animated) - 5}"
+                if not messagebox.askyesno(
+                    "File animati rilevati",
+                    f"{len(animated)} file potrebbero essere animati:\n{names}\n\n"
+                    f"Convertendo in {config.format} si salverà solo il "
+                    f"primo fotogramma.\n\nContinuare?",
+                    icon="warning",
+                ):
+                    self._converting = False
+                    self._file_panel.set_converting(False)
+                    return
+
         threading.Thread(
             target=self._run_conversion,
             args=(rows, config),

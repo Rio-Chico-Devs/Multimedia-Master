@@ -21,6 +21,7 @@ class SplitTab(ctk.CTkFrame):
         super().__init__(parent, **kw)
         self._engine   = PdfEngine()
         self._out_dir: Path | None = None
+        self._busy     = False
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -121,8 +122,9 @@ class SplitTab(ctk.CTkFrame):
         self._set_buttons_state("normal" if path else "disabled")
 
     def _set_buttons_state(self, state: str):
-        self._btn_ranges.configure(state=state)
-        self._btn_n.configure(state=state)
+        if not self._busy:
+            self._btn_ranges.configure(state=state)
+            self._btn_n.configure(state=state)
 
     def _browse_dir(self):
         from tkinter import filedialog
@@ -138,6 +140,8 @@ class SplitTab(ctk.CTkFrame):
     # ── Run: ranges ───────────────────────────────────────────────────────
 
     def _run_ranges(self):
+        if self._busy:
+            return
         pdf = self._picker.get_path()
         if not pdf:
             return
@@ -147,6 +151,9 @@ class SplitTab(ctk.CTkFrame):
             return
 
         out_dir = self._resolve_out_dir()
+        self._busy = True
+        self._btn_ranges.configure(state="disabled")
+        self._btn_n.configure(state="disabled")
         self._status.busy("Divisione in corso…")
         self.update_idletasks()
 
@@ -164,13 +171,16 @@ class SplitTab(ctk.CTkFrame):
             msg  = f"{len(ok)} file creati in {out_dir.name}"
             if fail:
                 msg += f"  |  {len(fail)} errori: {fail[0].error}"
-            self.after(0, self._status.ok if not fail else self._status.err, msg)
+            fn = self._status.ok if not fail else self._status.err
+            self.after(0, self._split_done, msg, fn)
         except Exception as exc:
-            self.after(0, self._status.err, str(exc))
+            self.after(0, self._split_done, str(exc), self._status.err)
 
     # ── Run: every N ──────────────────────────────────────────────────────
 
     def _run_every_n(self):
+        if self._busy:
+            return
         pdf = self._picker.get_path()
         if not pdf:
             return
@@ -183,6 +193,9 @@ class SplitTab(ctk.CTkFrame):
             return
 
         out_dir = self._resolve_out_dir()
+        self._busy = True
+        self._btn_ranges.configure(state="disabled")
+        self._btn_n.configure(state="disabled")
         self._status.busy("Divisione in corso…")
         self.update_idletasks()
 
@@ -200,6 +213,15 @@ class SplitTab(ctk.CTkFrame):
             msg  = f"{len(ok)} parti create in {out_dir.name}"
             if fail:
                 msg += f"  |  {len(fail)} errori: {fail[0].error}"
-            self.after(0, self._status.ok if not fail else self._status.err, msg)
+            fn = self._status.ok if not fail else self._status.err
+            self.after(0, self._split_done, msg, fn)
         except Exception as exc:
-            self.after(0, self._status.err, str(exc))
+            self.after(0, self._split_done, str(exc), self._status.err)
+
+    def _split_done(self, msg: str, status_fn) -> None:
+        self._busy = False
+        # Restore button states based on whether a file is loaded.
+        state = "normal" if self._picker.get_path() else "disabled"
+        self._btn_ranges.configure(state=state)
+        self._btn_n.configure(state=state)
+        status_fn(msg)

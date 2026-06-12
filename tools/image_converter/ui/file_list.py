@@ -1,3 +1,4 @@
+import threading
 import customtkinter as ctk
 from pathlib import Path
 from tkinter import filedialog
@@ -184,13 +185,28 @@ class FileListPanel(ctk.CTkFrame):
         folder = filedialog.askdirectory(title="Seleziona cartella")
         if not folder:
             return
-        added = 0
-        for path in sorted(Path(folder).rglob("*")):
-            if path.is_file() and path.suffix.lower() in INPUT_EXTS:
-                self.add_file(path)
-                added += 1
-        if added:
-            self.set_status(f"{added} immagini aggiunte dalla cartella")
+        self.set_status("Scansione cartella…")
+        threading.Thread(
+            target=self._scan_folder_bg,
+            args=(Path(folder),),
+            daemon=True,
+        ).start()
+
+    def _scan_folder_bg(self, folder: Path) -> None:
+        paths = sorted(
+            p for p in folder.rglob("*")
+            if p.is_file() and p.suffix.lower() in INPUT_EXTS
+        )
+        self.after(0, self._add_paths_sequential, paths, 0)
+
+    def _add_paths_sequential(self, paths: list, idx: int) -> None:
+        if idx >= len(paths):
+            n = len(paths)
+            self.set_status(f"{n} immagini aggiunte" if n else "Nessuna immagine trovata")
+            return
+        self.add_file(paths[idx])
+        # 2 ms gap — lets the event loop repaint between rows
+        self.after(2, self._add_paths_sequential, paths, idx + 1)
 
     def _remove_row(self, row: FileRow) -> None:
         if self._selected is row:
