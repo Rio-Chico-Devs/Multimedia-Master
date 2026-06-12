@@ -7,6 +7,7 @@ import customtkinter as ctk
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "tools"))
 from common.version import __version__
+from common.ui.geometry import fit_window
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -57,8 +58,7 @@ class Launcher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Multimedia Master")
-        self.geometry("900x360")
-        self.resizable(False, False)
+        fit_window(self, 900, 380, 640, 320)
         self._processes: list[subprocess.Popen] = []
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -73,8 +73,9 @@ class Launcher(ctk.CTk):
                      font=ctk.CTkFont(size=12)).pack(pady=(0, 22))
 
         cards = ctk.CTkFrame(self, fg_color="transparent")
-        cards.pack(fill="x", padx=40)
+        cards.pack(fill="both", expand=True, padx=40)
         cards.grid_columnconfigure((0, 1, 2), weight=1)
+        cards.grid_rowconfigure(0, weight=1)
 
         _ToolCard(
             cards,

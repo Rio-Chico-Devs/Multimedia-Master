@@ -3,6 +3,7 @@ import customtkinter as ctk
 from tkinter import messagebox
 
 from common.version import __version__
+from common.ui.geometry import fit_window
 from core.converter import ImageConverter
 from core.metadata_cleaner import MetadataCleaner
 from ui.file_list import FileListPanel
@@ -21,8 +22,7 @@ class MainWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"Multimedia Master  —  Convertitore Immagini  v{__version__}")
-        self.geometry("980x760")
-        self.minsize(740, 560)
+        fit_window(self, 980, 760, 720, 500)
 
         self._converter    = ImageConverter()
         self._cleaner      = MetadataCleaner()
@@ -75,7 +75,9 @@ class MainWindow(ctk.CTk):
         self._sidebar.grid(
             row=0, column=1, sticky="nsew", padx=(6, 12), pady=(12, 6))
 
-        self._preview = PreviewPanel(self)
+        # Shorter preview strip on small screens so the file list keeps room.
+        preview_h = 210 if self.winfo_screenheight() >= 860 else 160
+        self._preview = PreviewPanel(self, height=preview_h)
         self._preview.grid(
             row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
 

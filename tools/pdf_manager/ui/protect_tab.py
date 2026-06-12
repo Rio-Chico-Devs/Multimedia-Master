@@ -40,9 +40,9 @@ class ProtectTab(ctk.CTkFrame):
         panels.grid_columnconfigure((0, 1), weight=1)
         panels.grid_rowconfigure(0, weight=1)
 
-        # ── Encrypt panel ─────────────────────────────────────────────────
-        enc = ctk.CTkFrame(panels, corner_radius=10,
-                           fg_color=("#1a1a1a", "#1a1a1a"))
+        # ── Encrypt panel (scrollable: stays usable on short windows) ────
+        enc = ctk.CTkScrollableFrame(panels, corner_radius=10,
+                                     fg_color=("#1a1a1a", "#1a1a1a"))
         enc.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
 
         SectionLabel(enc, "🔒 Proteggi con password").pack(
@@ -95,9 +95,9 @@ class ProtectTab(ctk.CTkFrame):
             command=self._run_encrypt)
         self._btn_enc.pack(fill="x", padx=12, pady=(8, 12))
 
-        # ── Decrypt panel ─────────────────────────────────────────────────
-        dec = ctk.CTkFrame(panels, corner_radius=10,
-                           fg_color=("#1a1a1a", "#1a1a1a"))
+        # ── Decrypt panel (scrollable) ────────────────────────────────────
+        dec = ctk.CTkScrollableFrame(panels, corner_radius=10,
+                                     fg_color=("#1a1a1a", "#1a1a1a"))
         dec.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
 
         SectionLabel(dec, "🔓 Rimuovi protezione").pack(

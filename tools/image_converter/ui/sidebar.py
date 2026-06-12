@@ -10,18 +10,18 @@ from core.profiles import PROFILE_NAMES, get_profile
 from ui.widgets import SectionLabel, Separator
 
 
-class SettingsSidebar(ctk.CTkFrame):
+class SettingsSidebar(ctk.CTkScrollableFrame):
     """
     Right panel — profile selector, format, quality, optional resize,
     metadata toggle, output directory chooser.
+    Scrollable: on short windows every section stays reachable instead of
+    being clipped at the bottom.
     Exposes get_config() → ConversionConfig used by MainWindow.
     """
 
     def __init__(self, parent, **kw):
-        kw.setdefault("width", 260)
+        kw.setdefault("width", 248)
         super().__init__(parent, **kw)
-        self.grid_propagate(False)
-        self.grid_columnconfigure(0, weight=1)
         self._output_dir: Path | None = None
         self._applying_profile = False   # guard against recursive callbacks
         self._build()
@@ -157,7 +157,8 @@ class SettingsSidebar(ctk.CTkFrame):
                       command=self._choose_dir).pack(fill="x", padx=18, pady=(0, 4))
         ctk.CTkButton(self, text="Ripristina cartella originale",
                       height=28, fg_color="transparent", border_width=1,
-                      command=self._reset_dir).pack(fill="x", padx=18)
+                      command=self._reset_dir).pack(fill="x", padx=18,
+                                                    pady=(0, 14))
 
     # ── Callbacks ──────────────────────────────────────────────────────────────
 

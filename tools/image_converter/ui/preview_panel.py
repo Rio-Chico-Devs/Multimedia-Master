@@ -11,12 +11,15 @@ class PreviewPanel(ctk.CTkFrame):
     Activated by clicking any file row; updates again after conversion.
     """
 
-    _MAX = 180   # max thumbnail dimension in the panel
-
-    def __init__(self, parent, **kw):
-        kw.setdefault("height", 210)
+    def __init__(self, parent, height: int = 210, **kw):
+        kw["height"] = height
         super().__init__(parent, **kw)
         self.grid_propagate(False)
+        # Thumbnail budget derived from the panel height (header + info row
+        # + paddings ≈ 85 px) so portrait/square images never push the info
+        # label out of the fixed-height frame.
+        self._max_h = max(90, height - 85)
+        self._max_w = int(self._max_h * 1.8)
         self._build()
 
     # ── Public API ─────────────────────────────────────────────────────────────
@@ -84,8 +87,8 @@ class PreviewPanel(ctk.CTkFrame):
         try:
             pil = Image.open(path)
             orig_w, orig_h = pil.size
-            pil.draft("RGB", (self._MAX * 2, self._MAX * 2))  # fast JPEG decode
-            pil.thumbnail((self._MAX, self._MAX), Image.LANCZOS)
+            pil.draft("RGB", (self._max_w * 2, self._max_h * 2))  # fast JPEG decode
+            pil.thumbnail((self._max_w, self._max_h), Image.LANCZOS)
             img = ctk.CTkImage(pil, size=(pil.width, pil.height))
 
             frame._img_lbl.configure(image=img, text="")

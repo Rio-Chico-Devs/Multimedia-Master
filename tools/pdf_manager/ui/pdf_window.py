@@ -14,6 +14,8 @@ from pathlib import Path
 
 import customtkinter as ctk
 
+from common.ui.geometry import fit_window
+
 from .edit_tab    import EditTab
 from .convert_tab import ConvertTab
 from .merge_tab   import MergeTab
@@ -31,8 +33,7 @@ class PdfWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Gestione PDF — Multimedia Master")
-        self.geometry("960x680")
-        self.minsize(800, 560)
+        fit_window(self, 960, 680, 760, 520)
         self._init_dnd()
         self._build()
 

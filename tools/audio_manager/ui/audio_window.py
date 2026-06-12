@@ -20,6 +20,7 @@ import customtkinter as ctk
 from core.audio_engine import AudioEngine
 from core.dependencies import check as check_deps, install_hint
 from common.version import __version__
+from common.ui.geometry import fit_window
 
 from .convert_tab  import ConvertTab
 from .extract_tab  import ExtractTab
@@ -36,8 +37,7 @@ class AudioWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"Audio Manager — Multimedia Master  v{__version__}")
-        self.geometry("960x700")
-        self.minsize(820, 580)
+        fit_window(self, 960, 700, 760, 520)
 
         self._engine = AudioEngine()
         self._deps   = check_deps()
