@@ -65,13 +65,30 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
     def _build_profiles(self) -> None:
         SectionLabel(self, text="Profilo").pack(fill="x", padx=18, pady=(6, 2))
 
+        # User presets persist across sessions alongside the built-in profiles.
+        saved = self._settings.get("user_presets")
+        self._user_presets: dict[str, dict] = dict(saved) if isinstance(saved, dict) else {}
+
         self._profile_var = ctk.StringVar(value="Personalizzato")
-        ctk.CTkOptionMenu(
-            self, values=PROFILE_NAMES,
+        self._profile_menu = ctk.CTkOptionMenu(
+            self, values=self._all_profile_names(),
             variable=self._profile_var,
             command=self._on_profile_change,
             dynamic_resizing=False,
-        ).pack(fill="x", padx=18, pady=(0, 2))
+        )
+        self._profile_menu.pack(fill="x", padx=18, pady=(0, 2))
+
+        prow = ctk.CTkFrame(self, fg_color="transparent")
+        prow.pack(fill="x", padx=18, pady=(0, 2))
+        prow.grid_columnconfigure((0, 1), weight=1)
+        ctk.CTkButton(prow, text="💾 Salva preset", height=26,
+                      fg_color="#2a2a2a", hover_color="#3a3a3a",
+                      command=self._save_preset).grid(
+            row=0, column=0, sticky="ew", padx=(0, 2))
+        ctk.CTkButton(prow, text="🗑 Elimina", height=26,
+                      fg_color="#2a2a2a", hover_color="#3a3a3a",
+                      command=self._delete_preset).grid(
+            row=0, column=1, sticky="ew", padx=(2, 0))
 
         self._profile_hint = ctk.CTkLabel(
             self, text="Usa le impostazioni manuali",
@@ -80,6 +97,49 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
         )
         self._profile_hint.pack(fill="x", padx=18, pady=(0, 4))
         adaptive_wraplength(self._profile_hint)
+
+    # ── User presets ──────────────────────────────────────────────────────────
+
+    def _all_profile_names(self) -> list[str]:
+        return PROFILE_NAMES + sorted(self._user_presets.keys())
+
+    def _save_preset(self) -> None:
+        from tkinter import simpledialog, messagebox
+        name = simpledialog.askstring(
+            "Salva preset",
+            "Nome del preset:", parent=self)
+        if not name:
+            return
+        name = name.strip()
+        if not name or name in PROFILE_NAMES:
+            messagebox.showwarning(
+                "Nome non valido",
+                "Scegli un nome diverso dai profili predefiniti.")
+            return
+        cfg = self.get_config()
+        self._user_presets[name] = {
+            "format": cfg.format, "quality": cfg.quality,
+            "target_w": cfg.target_w, "target_h": cfg.target_h,
+            "strip_meta": cfg.strip_meta,
+        }
+        self._settings.set(user_presets=self._user_presets)
+        self._profile_menu.configure(values=self._all_profile_names())
+        self._profile_var.set(name)
+        self._profile_hint.configure(text=f"Preset personale «{name}»")
+
+    def _delete_preset(self) -> None:
+        from tkinter import messagebox
+        name = self._profile_var.get()
+        if name not in self._user_presets:
+            messagebox.showinfo(
+                "Elimina preset",
+                "Seleziona prima un preset personale (non i profili predefiniti).")
+            return
+        self._user_presets.pop(name, None)
+        self._settings.set(user_presets=self._user_presets)
+        self._profile_menu.configure(values=self._all_profile_names())
+        self._profile_var.set("Personalizzato")
+        self._on_profile_change("Personalizzato")
 
     def _build_format(self) -> None:
         SectionLabel(self, text="Formato output").pack(
@@ -172,35 +232,52 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
     # ── Callbacks ──────────────────────────────────────────────────────────────
 
     def _on_profile_change(self, name: str) -> None:
-        profile = get_profile(name)
-        if not profile or name == "Personalizzato":
+        if name == "Personalizzato":
             self._profile_hint.configure(text="Usa le impostazioni manuali")
             return
 
+        # User preset?
+        if name in self._user_presets:
+            d = self._user_presets[name]
+            cfg = ConversionConfig(
+                format=d.get("format", "WebP"),
+                quality=int(d.get("quality", 85)),
+                target_w=d.get("target_w"),
+                target_h=d.get("target_h"),
+                strip_meta=bool(d.get("strip_meta", True)),
+            )
+            self._apply_config(cfg, f"Preset personale «{name}»")
+            return
+
+        # Built-in profile
+        profile = get_profile(name)
+        if not profile:
+            self._profile_hint.configure(text="Usa le impostazioni manuali")
+            return
+        self._apply_config(profile.config, profile.description)
+
+    def _apply_config(self, cfg: ConversionConfig, hint: str) -> None:
+        """Push a ConversionConfig onto the widgets without flipping to manual."""
         self._applying_profile = True
-        cfg = profile.config
+        try:
+            self._fmt_var.set(cfg.format)
+            self._on_format_change(cfg.format)
 
-        # format
-        self._fmt_var.set(cfg.format)
-        self._on_format_change(cfg.format)
+            self._quality_slider.set(cfg.quality)
+            self._quality_lbl.configure(text=f"Qualità: {cfg.quality}")
 
-        # quality
-        self._quality_slider.set(cfg.quality)
-        self._quality_lbl.configure(text=f"Qualità: {cfg.quality}")
+            self._w_entry.delete(0, "end")
+            self._h_entry.delete(0, "end")
+            if cfg.target_w:
+                self._w_entry.insert(0, str(cfg.target_w))
+            if cfg.target_h:
+                self._h_entry.insert(0, str(cfg.target_h))
 
-        # resize
-        self._w_entry.delete(0, "end")
-        self._h_entry.delete(0, "end")
-        if cfg.target_w:
-            self._w_entry.insert(0, str(cfg.target_w))
-        if cfg.target_h:
-            self._h_entry.insert(0, str(cfg.target_h))
-
-        # metadata
-        self._strip_var.set(cfg.strip_meta)
-
-        self._profile_hint.configure(text=profile.description)
-        self._applying_profile = False
+            self._strip_var.set(cfg.strip_meta)
+            self._profile_hint.configure(text=hint)
+        finally:
+            self._applying_profile = False
+        self._persist()
 
     def _on_format_change(self, fmt: str) -> None:
         q = QUALITY_DEFAULTS.get(fmt, 85)
