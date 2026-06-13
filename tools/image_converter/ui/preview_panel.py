@@ -1,111 +1,207 @@
+import tkinter as tk
 import customtkinter as ctk
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageDraw, ImageTk
 
 from core.formats import ConversionResult
 
 
 class PreviewPanel(ctk.CTkFrame):
     """
-    Full-width bottom panel showing original vs converted image side by side.
-    Activated by clicking any file row; updates again after conversion.
+    Full-width bottom strip with a draggable before/after comparison slider.
+    Original is shown on the left half, converted on the right half.
+    Drag the vertical divider to reveal more of either side.
+    When only the source is available (not yet converted), fills the full width.
     """
+
+    _BG = (28, 28, 28)
 
     def __init__(self, parent, height: int = 210, **kw):
         kw["height"] = height
         super().__init__(parent, **kw)
         self.grid_propagate(False)
-        # Thumbnail budget derived from the panel height (header + info row
-        # + paddings ≈ 85 px) so portrait/square images never push the info
-        # label out of the fixed-height frame.
-        self._max_h = max(90, height - 85)
-        self._max_w = int(self._max_h * 1.8)
+
+        self._pil_left:  Image.Image | None = None
+        self._pil_right: Image.Image | None = None
+        self._info_left  = ""
+        self._info_right = ""
+        self._slider_x   = 0.5                           # normalised 0–1
+        self._photo: ImageTk.PhotoImage | None = None    # GC anchor
+
         self._build()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
     def show_source(self, path: Path) -> None:
-        """Display only the original — called when a row is selected."""
-        self._load_side(self._left, path)
-        self._clear_side(self._right, placeholder="Converti per vedere il risultato")
+        """Display only the original; right placeholder until conversion runs."""
+        self._pil_left, self._info_left = self._load_image(path)
+        self._pil_right  = None
+        self._info_right = "Converti per vedere il risultato"
+        self._render()
 
     def show_result(self, result: ConversionResult) -> None:
-        """Display both sides — called after a successful conversion."""
-        self._load_side(self._left, result.source)
+        """Display both halves after a successful conversion."""
+        self._pil_left, self._info_left = self._load_image(result.source)
         if result.success:
-            d = result.delta_pct
-            tag = f"  ·  {'-' if d >= 0 else '+'}{abs(d)}%"
-            self._load_side(self._right, result.output, extra=tag)
+            self._pil_right, info_r = self._load_image(result.output)
+            d    = result.delta_pct
+            sign = "-" if d >= 0 else "+"
+            self._info_right = f"{info_r}  ·  {sign}{abs(d)}%"
         else:
-            self._clear_side(self._right, placeholder=f"Errore: {result.error}")
+            self._pil_right  = None
+            self._info_right = f"Errore: {result.error}"
+        self._render()
 
     def clear(self) -> None:
-        self._clear_side(self._left,  placeholder="Seleziona un file per l'anteprima")
-        self._clear_side(self._right, placeholder="—")
+        self._pil_left   = None
+        self._pil_right  = None
+        self._info_left  = ""
+        self._info_right = ""
+        self._render()
 
     # ── Build ──────────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=0)
-        self.grid_columnconfigure(2, weight=1)
         self.grid_rowconfigure(0, weight=1)
+        self.grid_rowconfigure(1, weight=0)
 
-        self._left  = self._make_side("Originale")
-        self._arrow = ctk.CTkLabel(self, text="→", font=ctk.CTkFont(size=22),
-                                   text_color="#555")
-        self._right = self._make_side("Convertita")
+        self._canvas = tk.Canvas(
+            self, bg="#1c1c1c",
+            cursor="sb_h_double_arrow",
+            highlightthickness=0,
+        )
+        self._canvas.grid(row=0, column=0, sticky="nsew", padx=10, pady=(8, 2))
+        self._canvas.bind("<Configure>", self._on_resize)
+        self._canvas.bind("<B1-Motion>", self._on_drag)
 
-        self._left.grid( row=0, column=0, sticky="nsew", padx=(10, 4), pady=8)
-        self._arrow.grid(row=0, column=1, padx=6)
-        self._right.grid(row=0, column=2, sticky="nsew", padx=(4, 10), pady=8)
+        info_row = ctk.CTkFrame(self, fg_color="transparent")
+        info_row.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 6))
+        info_row.grid_columnconfigure(0, weight=1)
+        info_row.grid_columnconfigure(1, weight=1)
 
-        self.clear()
+        self._lbl_left = ctk.CTkLabel(
+            info_row, text="",
+            anchor="center", text_color="#666",
+            font=ctk.CTkFont(size=10),
+        )
+        self._lbl_left.grid(row=0, column=0, sticky="ew")
 
-    def _make_side(self, title: str) -> ctk.CTkFrame:
-        frame = ctk.CTkFrame(self, corner_radius=8, fg_color="#1c1c1c")
-        frame.grid_columnconfigure(0, weight=1)
-        frame.grid_rowconfigure(1, weight=1)
+        self._lbl_right = ctk.CTkLabel(
+            info_row, text="",
+            anchor="center", text_color="#666",
+            font=ctk.CTkFont(size=10),
+        )
+        self._lbl_right.grid(row=0, column=1, sticky="ew")
 
-        ctk.CTkLabel(frame, text=title,
-                     font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color="#888").grid(row=0, column=0, pady=(8, 2))
+    # ── Slider interaction ─────────────────────────────────────────────────────
 
-        frame._img_lbl  = ctk.CTkLabel(frame, text="")
-        frame._img_lbl.grid(row=1, column=0, pady=4)
+    def _on_resize(self, _event) -> None:
+        self._render()
 
-        frame._info_lbl = ctk.CTkLabel(frame, text="—",
-                                       text_color="#666",
-                                       font=ctk.CTkFont(size=10))
-        frame._info_lbl.grid(row=2, column=0, pady=(2, 8))
+    def _on_drag(self, event) -> None:
+        if self._pil_right is None:
+            return
+        w = self._canvas.winfo_width()
+        if w > 1:
+            self._slider_x = max(0.02, min(0.98, event.x / w))
+            self._render()
 
-        return frame
+    # ── Composite rendering ────────────────────────────────────────────────────
+
+    def _render(self) -> None:
+        w = self._canvas.winfo_width()
+        h = self._canvas.winfo_height()
+        if w < 4 or h < 4:
+            return
+
+        self._canvas.delete("all")
+
+        if self._pil_left is None:
+            self._canvas.create_text(
+                w // 2, h // 2,
+                text="Seleziona un file per l'anteprima",
+                fill="#444", font=("", 11),
+            )
+            self._lbl_left.configure(text="")
+            self._lbl_right.configure(text="")
+            return
+
+        img_l = self._fit_to(self._pil_left, w, h)
+
+        if self._pil_right is not None:
+            img_r = self._fit_to(self._pil_right, w, h)
+            split = int(self._slider_x * w)
+
+            def _plane(img: Image.Image) -> Image.Image:
+                """Centre img on a canvas-sized plane."""
+                p = Image.new("RGB", (w, h), self._BG)
+                p.paste(img, ((w - img.width) // 2, (h - img.height) // 2))
+                return p
+
+            composite = Image.new("RGB", (w, h), self._BG)
+            lp = _plane(img_l)
+            rp = _plane(img_r)
+            if split > 0:
+                composite.paste(lp.crop((0, 0, split, h)), (0, 0))
+            if split < w:
+                composite.paste(rp.crop((split, 0, w, h)), (split, 0))
+
+            # Divider line
+            draw = ImageDraw.Draw(composite)
+            draw.line([(split, 0), (split, h)], fill=(190, 190, 190), width=2)
+
+            # Circular drag handle
+            cy, r = h // 2, 11
+            draw.ellipse(
+                [(split - r, cy - r), (split + r, cy + r)],
+                fill=(210, 210, 210), outline=(130, 130, 130), width=1,
+            )
+            # Arrow triangles pointing left and right
+            draw.polygon(
+                [(split - 7, cy), (split - 2, cy - 4), (split - 2, cy + 4)],
+                fill=(60, 60, 60),
+            )
+            draw.polygon(
+                [(split + 7, cy), (split + 2, cy - 4), (split + 2, cy + 4)],
+                fill=(60, 60, 60),
+            )
+        else:
+            # Only source — fill full width
+            composite = Image.new("RGB", (w, h), self._BG)
+            composite.paste(img_l, ((w - img_l.width) // 2,
+                                    (h - img_l.height) // 2))
+
+        self._photo = ImageTk.PhotoImage(composite)
+        self._canvas.create_image(0, 0, anchor="nw", image=self._photo)
+
+        self._lbl_left.configure(text=self._info_left  or "Originale")
+        self._lbl_right.configure(text=self._info_right or "—")
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
-    def _load_side(self, frame, path: Path, extra: str = "") -> None:
+    def _fit_to(self, pil: Image.Image, max_w: int, max_h: int) -> Image.Image:
+        """Thumbnail image within bounds and flatten alpha onto _BG."""
+        img = pil.copy()
+        img.thumbnail((max_w, max_h), Image.LANCZOS)
+        if img.mode == "RGBA":
+            bg = Image.new("RGB", img.size, self._BG)
+            bg.paste(img, mask=img.split()[3])
+            return bg
+        if img.mode != "RGB":
+            return img.convert("RGB")
+        return img
+
+    @staticmethod
+    def _load_image(path: Path) -> tuple[Image.Image | None, str]:
+        """Open image + build info string; never raises."""
         try:
             pil = Image.open(path)
+            pil.load()
             orig_w, orig_h = pil.size
-            pil.draft("RGB", (self._max_w * 2, self._max_h * 2))  # fast JPEG decode
-            pil.thumbnail((self._max_w, self._max_h), Image.LANCZOS)
-            img = ctk.CTkImage(pil, size=(pil.width, pil.height))
-
-            frame._img_lbl.configure(image=img, text="")
-            frame._img_lbl._ctk_img = img   # prevent GC
-
             size_b   = path.stat().st_size
             size_str = (f"{size_b / 1024:.0f} KB" if size_b < 1_048_576
                         else f"{size_b / 1_048_576:.2f} MB")
-            frame._info_lbl.configure(
-                text=f"{orig_w}×{orig_h} px  ·  {size_str}{extra}"
-            )
+            return pil, f"{orig_w}×{orig_h} px  ·  {size_str}"
         except Exception as exc:
-            self._clear_side(frame, placeholder=f"Errore: {exc}")
-
-    @staticmethod
-    def _clear_side(frame, placeholder: str = "—") -> None:
-        frame._img_lbl.configure(image=None, text=placeholder,
-                                 text_color="#555",
-                                 font=ctk.CTkFont(size=11))
-        frame._info_lbl.configure(text="")
+            return None, f"Errore: {exc}"

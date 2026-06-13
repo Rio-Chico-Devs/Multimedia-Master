@@ -1,11 +1,15 @@
+import shutil
+import tempfile
 import threading
 import customtkinter as ctk
+from pathlib import Path
 from tkinter import messagebox
 
 from common.version import __version__
 from common.ui.geometry import fit_window
 from common.notify import notify
 from core.converter import ImageConverter
+from core.formats import ConversionConfig
 from core.metadata_cleaner import MetadataCleaner
 from ui.file_list import FileListPanel
 from ui.file_row import FileRow
@@ -27,10 +31,14 @@ class MainWindow(ctk.CTk):
         # below that the file list would collapse to nothing.
         fit_window(self, 980, 760, 720, 540)
 
-        self._converter    = ImageConverter()
-        self._cleaner      = MetadataCleaner()
-        self._converting   = False
-        self._cancel_event = threading.Event()
+        self._converter       = ImageConverter()
+        self._cleaner         = MetadataCleaner()
+        self._converting      = False
+        self._cancel_event    = threading.Event()
+
+        # Output-size estimate state
+        self._estimate_after_id: str | None = None
+        self._estimate_cancel   = threading.Event()
 
         self._init_dnd()
         self._build_ui()
@@ -70,11 +78,14 @@ class MainWindow(ctk.CTk):
             on_clean=self._start_cleaning,
             on_cancel=self._cancel,
             on_select=self._on_row_selected,
+            on_auto_convert=self._start_conversion,
+            on_files_change=self._schedule_estimate,
         )
         self._file_panel.grid(
             row=0, column=0, sticky="nsew", padx=(12, 6), pady=(12, 6))
 
-        self._sidebar = SettingsSidebar(self)
+        self._sidebar = SettingsSidebar(
+            self, on_settings_change=self._schedule_estimate)
         self._sidebar.grid(
             row=0, column=1, sticky="nsew", padx=(6, 12), pady=(12, 6))
 
@@ -110,6 +121,9 @@ class MainWindow(ctk.CTk):
             return None
         self._converting = True
         self._cancel_event.clear()
+        # Stop any running estimate — it would conflict with the batch converter.
+        self._estimate_cancel.set()
+        self._sidebar.set_estimate("")
         self._file_panel.set_converting(True)
         self._file_panel.set_progress(0)
         self._file_panel.set_progress_color("#1f6aa5")
@@ -118,6 +132,76 @@ class MainWindow(ctk.CTk):
     def _cancel(self) -> None:
         self._cancel_event.set()
         self._file_panel.set_status("Annullamento dopo il file corrente…")
+
+    # ── Output size estimation ─────────────────────────────────────────────────
+
+    def _schedule_estimate(self) -> None:
+        """Called when settings or file list change. Debounced 800 ms."""
+        if self._estimate_after_id:
+            self.after_cancel(self._estimate_after_id)
+        self._estimate_cancel.set()
+        self._sidebar.set_estimate("")
+        if not self._file_panel.rows or self._converting:
+            return
+        self._estimate_after_id = self.after(800, self._start_estimate)
+
+    def _start_estimate(self) -> None:
+        self._estimate_after_id = None
+        rows = self._file_panel.rows
+        if not rows or self._converting:
+            return
+        self._estimate_cancel.clear()
+        self._sidebar.set_estimate("Calcolo stima dimensioni…")
+        config     = self._sidebar.get_config()
+        first_path = rows[0].file_path
+        all_sizes  = [r.file_path.stat().st_size
+                      for r in rows if r.file_path.exists()]
+        threading.Thread(
+            target=self._run_estimate,
+            args=(first_path, config, all_sizes),
+            daemon=True,
+        ).start()
+
+    def _run_estimate(self, src: Path,
+                      config: ConversionConfig,
+                      all_sizes: list[int]) -> None:
+        tmpdir = Path(tempfile.mkdtemp(prefix="mm_estimate_"))
+        try:
+            est_cfg = ConversionConfig(
+                format=config.format, quality=config.quality,
+                target_w=config.target_w, target_h=config.target_h,
+                strip_meta=config.strip_meta, output_dir=tmpdir,
+            )
+            if self._estimate_cancel.is_set():
+                return
+            result = self._converter.convert(src, est_cfg)
+            if self._estimate_cancel.is_set():
+                return
+            if not result.success or not result.output.exists():
+                self.after(0, self._sidebar.set_estimate, "")
+                return
+
+            orig_size = src.stat().st_size
+            out_size  = result.output.stat().st_size
+            ratio     = out_size / orig_size if orig_size > 0 else 1.0
+            total_orig = sum(all_sizes)
+            est_out    = int(total_orig * ratio)
+
+            def _fmt(b: int) -> str:
+                if b < 1_048_576:
+                    return f"{b / 1024:.0f} KB"
+                return f"{b / 1_048_576:.1f} MB"
+
+            sign   = "-" if ratio <= 1 else "+"
+            change = abs(1 - ratio) * 100
+            text   = (f"Stima: {_fmt(total_orig)} → {_fmt(est_out)}"
+                      f"  ({sign}{change:.0f}%  {config.format}"
+                      f" q{config.quality})")
+            self.after(0, self._sidebar.set_estimate, text)
+        except Exception:
+            self.after(0, self._sidebar.set_estimate, "")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
 
     # ── Conversion orchestration ───────────────────────────────────────────────
 
@@ -256,6 +340,8 @@ class MainWindow(ctk.CTk):
                        verb: str, cancelled: bool) -> None:
         self._converting = False
         self._file_panel.set_converting(False)
+        # Re-run estimate so size info reflects converted files in queue.
+        self._schedule_estimate()
 
         if cancelled:
             color = "#ff9800"

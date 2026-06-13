@@ -21,21 +21,31 @@ class FileListPanel(ctk.CTkFrame):
     def __init__(
         self,
         parent,
-        on_convert: Callable,
-        on_clean:   Callable | None = None,
-        on_cancel:  Callable | None = None,
-        on_select:  Callable | None = None,
+        on_convert:       Callable,
+        on_clean:         Callable | None = None,
+        on_cancel:        Callable | None = None,
+        on_select:        Callable | None = None,
+        on_auto_convert:  Callable | None = None,
+        on_files_change:  Callable | None = None,
         **kw,
     ):
         super().__init__(parent, **kw)
-        self._on_convert = on_convert
-        self._on_clean   = on_clean    # metadata-strip batch (privacy mode)
-        self._on_cancel  = on_cancel   # abort the running batch
-        self._on_select  = on_select   # called with FileRow when a row is clicked
+        self._on_convert        = on_convert
+        self._on_clean          = on_clean           # metadata-strip batch
+        self._on_cancel         = on_cancel          # abort running batch
+        self._on_select         = on_select          # called with FileRow on click
+        self._on_auto_convert   = on_auto_convert    # triggered by watch folder
+        self._on_files_change   = on_files_change    # called when queue changes
         self._rows: list[FileRow] = []
         self._selected: FileRow | None = None
         self._drag_row: FileRow | None = None
         self._settings = Settings("image_converter")
+
+        # Watch-folder state
+        self._watch_folder: Path | None    = None
+        self._watch_stop   = threading.Event()
+        self._watch_seen:  set[Path]       = set()
+        self._watch_timer_id: str | None   = None
 
         self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
@@ -63,6 +73,7 @@ class FileListPanel(ctk.CTkFrame):
         row.pack(fill="x", pady=3, padx=4)
         self._rows.append(row)
         self._refresh_count()
+        self._notify_files_change()
 
     def enable_drop(self, dnd_available: bool) -> None:
         """Called by MainWindow after TkinterDnD is initialised (no-op: window handles drops)."""
@@ -113,6 +124,12 @@ class FileListPanel(ctk.CTkFrame):
             fg_color="#2a2a2a", hover_color="#3a3a3a",
             command=self._clear_all)
         self._clear_btn.pack(side="left", padx=4)
+
+        self._watch_btn = ctk.CTkButton(
+            bar, text="👁  Sorveglia", width=130, height=28,
+            fg_color="#1a3a1a", hover_color="#2a5a2a",
+            command=self._toggle_watch)
+        self._watch_btn.pack(side="right", padx=(4, 0))
 
     def _build_drop_zone(self) -> None:
         self._drop_zone = ctk.CTkFrame(
@@ -264,6 +281,7 @@ class FileListPanel(ctk.CTkFrame):
         if not self._rows:
             self._empty_lbl.pack(pady=30)
         self._refresh_count()
+        self._notify_files_change()
 
     def _select_row(self, row: FileRow) -> None:
         if self._selected and self._selected is not row:
@@ -319,6 +337,9 @@ class FileListPanel(ctk.CTkFrame):
     def _clear_all(self) -> None:
         for row in list(self._rows):
             self._remove_row(row)
+        # _remove_row fires _notify_files_change per row; one more here covers
+        # the no-rows case where the estimate should be cleared immediately.
+        self._notify_files_change()
 
     def _open_rename(self) -> None:
         if not self._rows:
@@ -379,6 +400,85 @@ class FileListPanel(ctk.CTkFrame):
             if row in self._rows:
                 self._remove_row(row)
         self.set_status(f"⧉ {len(dupes)} duplicati rimossi dalla coda")
+
+    # ── Watch folder ──────────────────────────────────────────────────────────
+
+    def _toggle_watch(self) -> None:
+        if self._watch_folder is None:
+            self._start_watch()
+        else:
+            self._stop_watch()
+
+    def _start_watch(self) -> None:
+        folder = filedialog.askdirectory(
+            title="Seleziona cartella da sorvegliare",
+            initialdir=self._last_dir(),
+        )
+        if not folder:
+            return
+        self._watch_folder = Path(folder)
+        # Pre-populate seen set so existing files aren't auto-imported.
+        self._watch_seen = {
+            p for p in self._watch_folder.rglob("*")
+            if p.is_file() and p.suffix.lower() in INPUT_EXTS
+        }
+        self._watch_stop.clear()
+        threading.Thread(target=self._watch_loop, daemon=True).start()
+        name = self._watch_folder.name[:16]
+        self._watch_btn.configure(
+            text=f"⏹  {name}",
+            fg_color="#5a1a1a", hover_color="#7a2a2a",
+        )
+        self.set_status(f"👁 Sorvegliando: {self._watch_folder}")
+
+    def _stop_watch(self) -> None:
+        self._watch_stop.set()
+        if self._watch_timer_id:
+            self.after_cancel(self._watch_timer_id)
+            self._watch_timer_id = None
+        self._watch_folder = None
+        self._watch_btn.configure(
+            text="👁  Sorveglia",
+            fg_color="#1a3a1a", hover_color="#2a5a2a",
+        )
+        self.set_status("Sorveglianza cartella interrotta")
+
+    def _watch_loop(self) -> None:
+        """Background thread: poll folder every 5 s for new image files."""
+        while not self._watch_stop.wait(5.0):
+            folder = self._watch_folder
+            if folder is None:
+                break
+            try:
+                for p in sorted(folder.rglob("*")):
+                    if (p.is_file()
+                            and p.suffix.lower() in INPUT_EXTS
+                            and p not in self._watch_seen):
+                        self._watch_seen.add(p)
+                        self.after(0, self._on_watch_new_file, p)
+            except Exception:
+                pass
+
+    def _on_watch_new_file(self, path: Path) -> None:
+        """Called on the main thread when the watcher discovers a new file."""
+        self.add_file(path)
+        self.set_status(f"👁 Nuovo file rilevato: {path.name}")
+        if self._on_auto_convert:
+            # Debounce: wait 3 s after the last new file before starting batch.
+            if self._watch_timer_id:
+                self.after_cancel(self._watch_timer_id)
+            self._watch_timer_id = self.after(3000, self._watch_trigger_convert)
+
+    def _watch_trigger_convert(self) -> None:
+        self._watch_timer_id = None
+        if self._on_auto_convert:
+            self._on_auto_convert()
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _notify_files_change(self) -> None:
+        if self._on_files_change:
+            self._on_files_change()
 
     def _on_drop(self, event) -> None:
         paths = self.tk.splitlist(event.data)

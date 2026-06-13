@@ -1,6 +1,7 @@
 import customtkinter as ctk
 from pathlib import Path
 from tkinter import filedialog
+from typing import Callable
 
 from common.settings import Settings
 from core.formats import (
@@ -14,7 +15,7 @@ from ui.widgets import SectionLabel, Separator, adaptive_wraplength
 class SettingsSidebar(ctk.CTkScrollableFrame):
     """
     Right panel — profile selector, format, quality, optional resize,
-    metadata toggle, output directory chooser.
+    metadata toggle, output directory chooser, and output size estimate.
     Scrollable: on short windows every section stays reachable instead of
     being clipped at the bottom.
     Exposes get_config() → ConversionConfig used by MainWindow.
@@ -23,12 +24,15 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
     with the user's last format, quality, metadata choice and output folder.
     """
 
-    def __init__(self, parent, **kw):
+    def __init__(self, parent,
+                 on_settings_change: Callable | None = None,
+                 **kw):
         kw.setdefault("width", 248)
         super().__init__(parent, **kw)
         self._output_dir: Path | None = None
-        self._applying_profile = False   # guard against recursive callbacks
-        self._settings = Settings("image_converter")
+        self._applying_profile   = False   # guard against recursive callbacks
+        self._settings           = Settings("image_converter")
+        self._on_settings_change = on_settings_change
         self._build()
         self._restore()
 
@@ -61,6 +65,8 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
         self._build_options()
         Separator(self).pack()
         self._build_output_dir()
+        Separator(self).pack()
+        self._build_estimate()
 
     def _build_profiles(self) -> None:
         SectionLabel(self, text="Profilo").pack(fill="x", padx=18, pady=(6, 2))
@@ -229,6 +235,21 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
                       command=self._reset_dir).pack(fill="x", padx=18,
                                                     pady=(0, 14))
 
+    def _build_estimate(self) -> None:
+        self._est_lbl = ctk.CTkLabel(
+            self, text="",
+            text_color="#5a8a6a", font=ctk.CTkFont(size=10),
+            anchor="w", wraplength=220, justify="left",
+        )
+        self._est_lbl.pack(fill="x", padx=18, pady=(6, 14))
+        adaptive_wraplength(self._est_lbl)
+
+    # ── Public estimate API ────────────────────────────────────────────────────
+
+    def set_estimate(self, text: str) -> None:
+        """Update the output-size estimate label (called from MainWindow thread)."""
+        self._est_lbl.configure(text=text)
+
     # ── Callbacks ──────────────────────────────────────────────────────────────
 
     def _on_profile_change(self, name: str) -> None:
@@ -323,6 +344,8 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
             target_h=self._parse_int(self._h_entry.get()),
             output_dir=str(self._output_dir) if self._output_dir else None,
         )
+        if self._on_settings_change:
+            self._on_settings_change()
 
     def _restore(self) -> None:
         """Reapply the previous session's settings. Missing keys keep defaults."""
