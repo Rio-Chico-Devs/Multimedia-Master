@@ -12,10 +12,12 @@ from ui.file_row import FileRow
 from ui.batch_rename import BatchRenameDialog
 from ui.widgets import adaptive_wraplength
 
-# Matches the converter's output naming: "<stem>_converted" or
-# "<stem>_converted_<n>". Used to keep the watch folder from re-ingesting
-# files it just produced (see _is_conversion_output).
-_CONVERTED_RE = re.compile(r"_converted(_\d+)?$")
+# Matches filenames this app produces so the watch loop never re-ingests its
+# own output.  Anchored at the END of the stem so "my_clean_scan.jpg" passes
+# but "photo_clean.jpg" and "photo_converted.jpg" are filtered out.
+#   ImageConverter  → "<stem>_converted"  / "<stem>_converted_<n>"
+#   MetadataCleaner → "<stem>_clean"      / "<stem>_clean_<n>"
+_OWN_OUTPUT_RE = re.compile(r"_(converted|clean)(_\d+)?$")
 
 
 class FileListPanel(ctk.CTkFrame):
@@ -474,7 +476,7 @@ class FileListPanel(ctk.CTkFrame):
         loop from re-ingesting its own output and looping forever when the
         output directory is the watched folder.
         """
-        return bool(_CONVERTED_RE.search(path.stem))
+        return bool(_OWN_OUTPUT_RE.search(path.stem))
 
     def _on_watch_new_file(self, path: Path) -> None:
         """Called on the main thread when the watcher discovers a new file."""

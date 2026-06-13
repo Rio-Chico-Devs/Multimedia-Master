@@ -197,8 +197,12 @@ class PreviewPanel(ctk.CTkFrame):
         """Open image + build info string; never raises."""
         try:
             pil = Image.open(path)
+            orig_w, orig_h = pil.size   # size is available before full load
+            # Hint the JPEG decoder to decode at ≤ half resolution —
+            # a 20 MP photo needs ~70 MB uncompressed; draft() keeps it ≤ 18 MB.
+            # This is a no-op for PNG, WebP, TIFF and other formats.
+            pil.draft("RGB", (3840, 2160))
             pil.load()
-            orig_w, orig_h = pil.size
             size_b   = path.stat().st_size
             size_str = (f"{size_b / 1024:.0f} KB" if size_b < 1_048_576
                         else f"{size_b / 1_048_576:.2f} MB")
