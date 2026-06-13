@@ -20,6 +20,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -283,6 +285,60 @@ class AudioEngine:
         # 2 — system PATH fallback
         return shutil.which("ffmpeg")
 
+    # ── Cancellable subprocess runner ──────────────────────────────────────
+    # ffmpeg/demucs can run for minutes. subprocess.run() blocks with no way to
+    # abort, so we Popen, drain the captured pipe on a daemon thread (to avoid a
+    # full-pipe deadlock), and poll cancel_event every 100 ms. On cancel we
+    # terminate (then kill) the child. Returns (returncode, output_text, cancelled).
+
+    @staticmethod
+    def _run_cancellable(
+        cmd:          list[str],
+        cancel_event: "threading.Event | None" = None,
+        line_cb:      Callable[[str], None] | None = None,
+        merge_stderr: bool = False,
+    ) -> tuple[int | None, str, bool]:
+        pipe = subprocess.STDOUT if merge_stderr else subprocess.PIPE
+        proc = subprocess.Popen(
+            cmd,
+            stdout=(subprocess.PIPE if merge_stderr else subprocess.DEVNULL),
+            stderr=pipe,
+            encoding="utf-8",
+            errors="replace",
+        )
+        stream = proc.stdout if merge_stderr else proc.stderr
+        buf: list[str] = []
+
+        def _drain() -> None:
+            try:
+                for line in (stream or []):
+                    buf.append(line)
+                    if line_cb:
+                        line_cb(line)
+            except Exception:
+                pass
+
+        drainer = threading.Thread(target=_drain, daemon=True)
+        drainer.start()
+
+        cancelled = False
+        while proc.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                break
+            time.sleep(0.1)
+
+        drainer.join(timeout=1)
+        return proc.returncode, "".join(buf), cancelled
+
     # ── Probe ─────────────────────────────────────────────────────────────
 
     def probe(self, path: Path) -> AudioInfo:
@@ -370,12 +426,13 @@ class AudioEngine:
 
     def convert(
         self,
-        src:         Path,
-        output:      Path,
-        fmt:         str,
-        bitrate:     int | None = None,   # kbps
-        sample_rate: int | None = None,   # Hz
-        channels:    int | None = None,
+        src:          Path,
+        output:       Path,
+        fmt:          str,
+        bitrate:      int | None = None,   # kbps
+        sample_rate:  int | None = None,   # Hz
+        channels:     int | None = None,
+        cancel_event: "threading.Event | None" = None,
     ) -> AudioResult:
         """Convert/compress audio to the target format using ffmpeg directly."""
         if not self._ffmpeg:
@@ -391,16 +448,15 @@ class AudioEngine:
                 cmd += ["-b:a", f"{bitrate}k"]
             cmd.append(str(output))
 
-            proc = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                encoding="utf-8",
-                errors="replace",
-            )
-            if proc.returncode != 0:
+            code, err_text, cancelled = self._run_cancellable(cmd, cancel_event)
+            if cancelled:
+                # Drop any partial output so it can't be mistaken for a result.
+                try: output.unlink(missing_ok=True)
+                except Exception: pass
+                return AudioResult(output=output, success=False, error="Annullato")
+            if code != 0:
                 # Return last 300 chars of stderr for a useful error message
-                err = proc.stderr.strip()[-300:] if proc.stderr else "Errore sconosciuto"
+                err = err_text.strip()[-300:] if err_text else "Errore sconosciuto"
                 return AudioResult(output=output, success=False, error=err)
             return self._ok(output)
         except Exception as exc:
@@ -410,18 +466,18 @@ class AudioEngine:
 
     def extract_audio(
         self,
-        video:       Path,
-        output:      Path,
-        fmt:         str = "mp3",
-        bitrate:     int | None = None,
-        sample_rate: int | None = None,
-        progress_cb: Callable[[float], None] | None = None,
+        video:        Path,
+        output:       Path,
+        fmt:          str = "mp3",
+        bitrate:      int | None = None,
+        sample_rate:  int | None = None,
+        progress_cb:  Callable[[float], None] | None = None,
+        cancel_event: "threading.Event | None" = None,
     ) -> AudioResult:
         """Extract the audio track from any video file using ffmpeg."""
         if not self._ffmpeg:
             return AudioResult(output=output, success=False,
                                error="ffmpeg non trovato. Installalo e aggiungilo al PATH.")
-        proc: subprocess.Popen | None = None
         try:
             cmd = [self._ffmpeg, "-y", "-i", str(video), "-vn"]
             if sample_rate:
@@ -430,45 +486,39 @@ class AudioEngine:
                 cmd += ["-b:a", f"{bitrate}k"]
             cmd.append(str(output))
 
-            proc = subprocess.Popen(
-                cmd,
-                stderr=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                encoding="utf-8",
-                errors="replace",
-            )
-            duration_s = 0.0
-            for line in (proc.stderr or []):
-                if "Duration:" in line and duration_s == 0.0:
+            # ffmpeg prints duration once, then per-frame "time=" progress. We
+            # parse both from the stderr stream drained by _run_cancellable.
+            state = {"duration": 0.0}
+
+            def _on_line(line: str) -> None:
+                if "Duration:" in line and state["duration"] == 0.0:
                     try:
                         t = line.split("Duration:")[1].split(",")[0].strip()
                         h, m, s = t.split(":")
-                        duration_s = int(h) * 3600 + int(m) * 60 + float(s)
+                        state["duration"] = int(h) * 3600 + int(m) * 60 + float(s)
                     except Exception:
                         pass
-                if "time=" in line and duration_s > 0 and progress_cb:
+                if "time=" in line and state["duration"] > 0 and progress_cb:
                     try:
                         t = line.split("time=")[1].split()[0]
                         h, m, s = t.split(":")
                         elapsed = int(h) * 3600 + int(m) * 60 + float(s)
-                        progress_cb(min(elapsed / duration_s, 1.0))
+                        progress_cb(min(elapsed / state["duration"], 1.0))
                     except Exception:
                         pass
-            proc.wait()
-            if proc.returncode != 0:
+
+            code, _, cancelled = self._run_cancellable(
+                cmd, cancel_event, line_cb=_on_line)
+            if cancelled:
+                try: output.unlink(missing_ok=True)
+                except Exception: pass
+                return AudioResult(output=output, success=False, error="Annullato")
+            if code != 0:
                 return AudioResult(output=output, success=False,
-                                   error=f"ffmpeg ha restituito codice {proc.returncode}.")
-            return self._ok(output, duration_s)
+                                   error=f"ffmpeg ha restituito codice {code}.")
+            return self._ok(output, state["duration"])
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
-        finally:
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except Exception:
-                    try: proc.kill()
-                    except Exception: pass
 
     # ── Enhance (noise reduction + normalize) ─────────────────────────────
 
@@ -954,16 +1004,16 @@ class AudioEngine:
 
     def separate_stems(
         self,
-        src:         Path,
-        output_dir:  Path,
-        model:       str = "htdemucs",
-        progress_cb: Callable[[str], None] | None = None,
+        src:          Path,
+        output_dir:   Path,
+        model:        str = "htdemucs",
+        progress_cb:  Callable[[str], None] | None = None,
+        cancel_event: "threading.Event | None" = None,
     ) -> list[AudioResult]:
         """
         Separate a track into stems using demucs (external process).
         Outputs to output_dir/<model>/<track_name>/{vocals,drums,bass,other}.wav
         """
-        proc: subprocess.Popen | None = None
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             cmd = [
@@ -972,22 +1022,20 @@ class AudioEngine:
                 "-n",    model,
                 str(src),
             ]
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                encoding="utf-8",
-                errors="replace",
-            )
-            for line in (proc.stdout or []):
+
+            def _on_line(line: str) -> None:
                 line = line.strip()
                 if line and progress_cb:
                     progress_cb(line)
-            proc.wait()
 
-            if proc.returncode != 0:
+            code, _, cancelled = self._run_cancellable(
+                cmd, cancel_event, line_cb=_on_line, merge_stderr=True)
+
+            if cancelled:
+                return [AudioResult(output=None, success=False, error="Annullato")]
+            if code != 0:
                 return [AudioResult(output=None, success=False,
-                                    error=f"demucs error (codice {proc.returncode}).")]
+                                    error=f"demucs error (codice {code}).")]
 
             stem_dir = output_dir / model / src.stem
             results  = [self._ok(f) for f in sorted(stem_dir.glob("*.wav"))
@@ -998,15 +1046,6 @@ class AudioEngine:
             return results
         except Exception as exc:
             return [AudioResult(output=None, success=False, error=str(exc))]
-        finally:
-            # Ensure demucs doesn't linger as an orphan on exception/cancel
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except Exception:
-                    try: proc.kill()
-                    except Exception: pass
 
     # ── Metadata / Tags ───────────────────────────────────────────────────
 

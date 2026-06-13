@@ -2,6 +2,7 @@ import customtkinter as ctk
 from pathlib import Path
 from tkinter import filedialog
 
+from common.settings import Settings
 from core.formats import (
     OUTPUT_FORMATS, QUALITY_DEFAULTS, QUALITY_HINTS,
     NO_QUALITY_FORMATS, ConversionConfig,
@@ -17,6 +18,9 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
     Scrollable: on short windows every section stays reachable instead of
     being clipped at the bottom.
     Exposes get_config() → ConversionConfig used by MainWindow.
+
+    Settings persist across sessions via common.settings, so the tool reopens
+    with the user's last format, quality, metadata choice and output folder.
     """
 
     def __init__(self, parent, **kw):
@@ -24,7 +28,9 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
         super().__init__(parent, **kw)
         self._output_dir: Path | None = None
         self._applying_profile = False   # guard against recursive callbacks
+        self._settings = Settings("image_converter")
         self._build()
+        self._restore()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -214,16 +220,67 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
         if not self._applying_profile:
             self._profile_var.set("Personalizzato")
             self._profile_hint.configure(text="Usa le impostazioni manuali")
+            self._persist()
 
     def _choose_dir(self) -> None:
         d = filedialog.askdirectory(title="Scegli cartella di output")
         if d:
             self._output_dir = Path(d)
             self._outdir_lbl.configure(text=str(self._output_dir))
+            self._persist()
 
     def _reset_dir(self) -> None:
         self._output_dir = None
         self._outdir_lbl.configure(text="Stessa cartella dei file originali")
+        self._persist()
+
+    # ── Persistence ──────────────────────────────────────────────────────────
+
+    def _persist(self) -> None:
+        """Save the current settings so the next session starts where this ended."""
+        self._settings.set(
+            format=self._fmt_var.get(),
+            quality=int(self._quality_slider.get()),
+            strip_meta=bool(self._strip_var.get()),
+            target_w=self._parse_int(self._w_entry.get()),
+            target_h=self._parse_int(self._h_entry.get()),
+            output_dir=str(self._output_dir) if self._output_dir else None,
+        )
+
+    def _restore(self) -> None:
+        """Reapply the previous session's settings. Missing keys keep defaults."""
+        # Guard so restore-time callbacks don't fire a redundant _persist().
+        self._applying_profile = True
+        try:
+            fmt = self._settings.get("format")
+            if fmt in OUTPUT_FORMATS:
+                self._fmt_var.set(fmt)
+                self._on_format_change(fmt)   # default quality + hint + state
+
+            q = self._settings.get("quality")
+            if isinstance(q, int) and 1 <= q <= 100:
+                self._quality_slider.set(q)
+                self._quality_lbl.configure(text=f"Qualità: {q}")
+
+            sm = self._settings.get("strip_meta")
+            if isinstance(sm, bool):
+                self._strip_var.set(sm)
+
+            for key, entry in (("target_w", self._w_entry),
+                               ("target_h", self._h_entry)):
+                v = self._settings.get(key)
+                if isinstance(v, int) and v > 0:
+                    entry.delete(0, "end")
+                    entry.insert(0, str(v))
+
+            od = self._settings.get("output_dir")
+            if od:
+                p = Path(od)
+                if p.is_dir():
+                    self._output_dir = p
+                    self._outdir_lbl.configure(text=str(p))
+        finally:
+            self._applying_profile = False
 
     # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -234,6 +291,7 @@ class SettingsSidebar(ctk.CTkScrollableFrame):
             entry.configure(border_color="#f44336")   # red
         else:
             entry.configure(border_color=["#979DA2", "#565B5E"])  # CTk default
+            self._persist()   # persist valid resize dimensions
 
     @staticmethod
     def _parse_int(value: str) -> int | None:

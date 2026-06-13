@@ -17,6 +17,8 @@ import customtkinter as ctk
 
 from common.ui.widgets import (SectionLabel, Separator, StatusBar,
                                adaptive_wraplength)
+from common.notify import notify
+from common.settings import Settings
 from core.audio_engine import AudioEngine
 from core.formats import AUDIO_FORMATS, PRESETS, AUDIO_EXTS
 
@@ -32,7 +34,11 @@ class ConvertTab(ctk.CTkFrame):
         self._engine   = engine
         self._out_dir: Path | None = None
         self._file_rows: list[tuple[Path, ctk.CTkFrame, ctk.CTkLabel]] = []
+        self._cancel_event = threading.Event()
+        self._busy = False
+        self._settings = Settings("audio_convert")
         self._build()
+        self._restore()
 
     # ── Build ──────────────────────────────────────────────────────────────
 
@@ -166,12 +172,18 @@ class ConvertTab(ctk.CTkFrame):
         bot.grid_columnconfigure(0, weight=1)
         self._status = StatusBar(bot)
         self._status.grid(row=0, column=0, sticky="ew")
+        self._btn_cancel = ctk.CTkButton(
+            bot, text="⏹  Annulla",
+            width=100, height=36, state="disabled",
+            fg_color="#5a1a1a", hover_color="#7a2a2a",
+            command=self._cancel)
+        self._btn_cancel.grid(row=0, column=1, padx=(8, 0))
         self._btn_run = ctk.CTkButton(
             bot, text="▶  Converti",
             width=130, height=36,
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._run)
-        self._btn_run.grid(row=0, column=1, padx=(8, 0))
+        self._btn_run.grid(row=0, column=2, padx=(8, 0))
 
         self._on_preset_change()
 
@@ -236,6 +248,18 @@ class ConvertTab(ctk.CTkFrame):
             self._custom_frame.pack(fill="x")
         else:
             self._custom_frame.pack_forget()
+        self._settings.set(preset=key)
+
+    def _restore(self) -> None:
+        preset = self._settings.get("preset")
+        if preset in PRESETS:
+            self._preset_var.set(preset)
+            self._on_preset_change()
+        od = self._settings.get("output_dir")
+        if od and Path(od).is_dir():
+            self._out_dir = Path(od)
+            self._dir_lbl.configure(text=f"…/{Path(od).name}",
+                                    text_color="white")
 
     def _on_fmt_change(self, fmt: str) -> None:
         lossy = AUDIO_FORMATS.get(fmt, AUDIO_FORMATS["mp3"]).lossy
@@ -249,6 +273,7 @@ class ConvertTab(ctk.CTkFrame):
             self._out_dir = Path(d)
             name = Path(d).name
             self._dir_lbl.configure(text=f"…/{name}", text_color="white")
+            self._settings.set(output_dir=str(self._out_dir))
 
     # ── Run ────────────────────────────────────────────────────────────────
 
@@ -274,29 +299,46 @@ class ConvertTab(ctk.CTkFrame):
             sr      = preset.sample_rate
             ch      = preset.channels
 
+        self._busy = True
+        self._cancel_event.clear()
         self._btn_run.configure(state="disabled")
+        self._btn_cancel.configure(state="normal")
         self._progress.set(0)
         self._status.busy(f"Avvio conversione (0/{len(self._file_rows)})…")
         threading.Thread(
             target=self._worker, args=(fmt, bitrate, sr, ch), daemon=True
         ).start()
 
+    def _cancel(self) -> None:
+        self._cancel_event.set()
+        self._status.busy("Annullamento…")
+
     def _worker(self, fmt: str, bitrate, sr, ch) -> None:
         import sys
-        ext    = AUDIO_FORMATS[fmt].ext
-        total  = len(self._file_rows)
-        ok     = 0
+        ext       = AUDIO_FORMATS[fmt].ext
+        total     = len(self._file_rows)
+        ok        = 0
+        cancelled = False
         errors: list[str] = []
 
         for i, (path, _, lbl) in enumerate(self._file_rows):
+            if self._cancel_event.is_set():
+                cancelled = True
+                break
             out_dir = self._out_dir or path.parent
             output  = out_dir / (path.stem + ext)
             self.after(0, lambda l=lbl: l.configure(text="⏳", text_color="#aaa"))
-            result = self._engine.convert(path, output, fmt, bitrate, sr, ch)
+            result = self._engine.convert(path, output, fmt, bitrate, sr, ch,
+                                          cancel_event=self._cancel_event)
             if result.success:
                 ok += 1
                 self.after(0, lambda l=lbl: l.configure(
                     text="✓", text_color="#4caf50"))
+            elif result.error == "Annullato":
+                cancelled = True
+                self.after(0, lambda l=lbl: l.configure(
+                    text="⏹", text_color="#ff9800"))
+                break
             else:
                 err_msg = result.error or "Errore sconosciuto"
                 errors.append(f"{path.name}: {err_msg}")
@@ -307,11 +349,20 @@ class ConvertTab(ctk.CTkFrame):
             self.after(0, self._status.busy,
                        f"In corso ({i+1}/{total})…")
 
-        if ok == total:
+        if cancelled:
+            self.after(0, self._status.info,
+                       f"⏹ Annullato · {ok}/{total} convertiti prima dello stop")
+        elif ok == total:
             self.after(0, self._status.ok, f"{ok}/{total} convertiti")
+            notify("Audio Manager", f"Conversione completata: {ok} file")
         else:
             # Show first error detail in status bar
             first_err = errors[0] if errors else ""
             self.after(0, self._status.err,
                        f"{ok}/{total} convertiti · {total-ok} errori — {first_err}")
-        self.after(0, lambda: self._btn_run.configure(state="normal"))
+        self.after(0, self._done)
+
+    def _done(self) -> None:
+        self._busy = False
+        self._btn_run.configure(state="normal")
+        self._btn_cancel.configure(state="disabled")

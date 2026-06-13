@@ -15,6 +15,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, Separator, StatusBar
+from common.notify import notify
 from core.audio_engine import AudioEngine
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS
@@ -36,6 +37,7 @@ class StemsTab(ctk.CTkFrame):
         super().__init__(parent, **kw)
         self._engine = engine
         self._deps   = deps
+        self._cancel_event = threading.Event()
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -138,13 +140,19 @@ class StemsTab(ctk.CTkFrame):
         bot.grid_columnconfigure(0, weight=1)
         self._status = StatusBar(bot)
         self._status.grid(row=0, column=0, sticky="ew")
+        self._btn_cancel = ctk.CTkButton(
+            bot, text="⏹  Annulla",
+            width=100, height=36, state="disabled",
+            fg_color="#5a1a1a", hover_color="#7a2a2a",
+            command=self._cancel)
+        self._btn_cancel.grid(row=0, column=1, padx=(8, 0))
         self._btn_run = ctk.CTkButton(
             bot, text="🎵  Separa tracce",
             width=160, height=36,
             font=ctk.CTkFont(size=12, weight="bold"),
             state="disabled",
             command=self._run)
-        self._btn_run.grid(row=0, column=1, padx=(8, 0))
+        self._btn_run.grid(row=0, column=2, padx=(8, 0))
 
     def _build_install_guide(self) -> None:
         frame = ctk.CTkFrame(self, fg_color=("#111", "#111"), corner_radius=10)
@@ -228,12 +236,19 @@ class StemsTab(ctk.CTkFrame):
         for lbl in self._stem_labels.values():
             lbl.configure(text="⏳ elaborazione…", text_color="#aaa")
 
+        self._cancel_event.clear()
         self._btn_run.configure(state="disabled")
+        self._btn_cancel.configure(state="normal")
         self._status.busy("Separazione in corso (può richiedere minuti)…")
         self._log_append(f"▶ {src.name}  —  modello: {model}")
         threading.Thread(
             target=self._worker, args=(src, out_dir, model), daemon=True
         ).start()
+
+    def _cancel(self) -> None:
+        self._cancel_event.set()
+        self._status.busy("Annullamento (interruzione di demucs)…")
+        self._log_append("⏹ Annullamento richiesto…")
 
     def _worker(self, src: Path, out_dir: Path, model: str) -> None:
         def _prog(line: str) -> None:
@@ -242,9 +257,11 @@ class StemsTab(ctk.CTkFrame):
                 self.after(0, self._status.busy,
                            f"Separazione… {line}")
 
-        results = self._engine.separate_stems(src, out_dir, model, _prog)
+        results = self._engine.separate_stems(
+            src, out_dir, model, _prog, cancel_event=self._cancel_event)
 
         ok = [r for r in results if r.success]
+        cancelled = bool(results) and results[0].error == "Annullato"
         if ok:
             # Update stem cards
             for r in ok:
@@ -255,6 +272,12 @@ class StemsTab(ctk.CTkFrame):
                         text=f"✓ {n}", text_color="#4caf50"))
             self.after(0, self._status.ok,
                        f"{len(ok)} tracce salvate in: {out_dir}")
+            notify("Audio Manager", f"Separazione completata: {len(ok)} tracce")
+        elif cancelled:
+            for lbl in self._stem_labels.values():
+                self.after(0, lambda l=lbl: l.configure(
+                    text="⏹ annullato", text_color="#ff9800"))
+            self.after(0, self._status.info, "⏹ Separazione annullata")
         else:
             err = results[0].error if results else "Errore sconosciuto"
             for lbl in self._stem_labels.values():
@@ -262,4 +285,8 @@ class StemsTab(ctk.CTkFrame):
                     text="✗ errore", text_color="#f44336"))
             self.after(0, self._status.err, err)
 
-        self.after(0, lambda: self._btn_run.configure(state="normal"))
+        self.after(0, self._done)
+
+    def _done(self) -> None:
+        self._btn_run.configure(state="normal")
+        self._btn_cancel.configure(state="disabled")

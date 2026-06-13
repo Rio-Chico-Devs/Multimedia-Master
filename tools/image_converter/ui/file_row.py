@@ -25,17 +25,30 @@ class FileRow(ctk.CTkFrame):
         file_path: Path,
         on_remove:  Callable,
         on_select:  Callable | None = None,
+        on_drag_start:  Callable | None = None,
+        on_drag_motion: Callable | None = None,
+        on_drag_end:    Callable | None = None,
         **kw,
     ):
         super().__init__(parent, corner_radius=8, **kw)
         self.file_path  = file_path
         self._on_select = on_select
+        self._on_drag_start  = on_drag_start
+        self._on_drag_motion = on_drag_motion
+        self._on_drag_end    = on_drag_end
         self._result:   ConversionResult | None = None
         self._selected  = False
         self._dims      = ""
         self._build(on_remove)
         # Kick off thumbnail decode — never blocks the main thread.
         threading.Thread(target=self._load_thumb, daemon=True).start()
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def refresh_name(self) -> None:
+        """Re-read name/size after the file was renamed or moved on disk."""
+        self._name_lbl.configure(text=self.file_path.name)
+        self._subtitle_lbl.configure(text=self._subtitle())
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -68,10 +81,24 @@ class FileRow(ctk.CTkFrame):
 
     def _build(self, on_remove) -> None:
         s = self.THUMB_SIZE
+
+        # Drag handle — grab here to reorder the queue.
+        self._handle = ctk.CTkLabel(
+            self, text="⠿", width=16, text_color="#666",
+            font=ctk.CTkFont(size=16), cursor="fleur")
+        self._handle.pack(side="left", padx=(8, 0), pady=8)
+        if self._on_drag_start:
+            self._handle.bind("<ButtonPress-1>",
+                              lambda e: self._on_drag_start(self, e))
+            self._handle.bind("<B1-Motion>",
+                              lambda e: self._on_drag_motion(self, e))
+            self._handle.bind("<ButtonRelease-1>",
+                              lambda e: self._on_drag_end(self, e))
+
         # Placeholder shown while thumbnail loads in background.
         self._thumb_lbl = ctk.CTkLabel(
             self, text="🖼", font=ctk.CTkFont(size=22), width=s)
-        self._thumb_lbl.pack(side="left", padx=(10, 6), pady=8)
+        self._thumb_lbl.pack(side="left", padx=(6, 6), pady=8)
 
         self._add_info()
 
@@ -87,16 +114,20 @@ class FileRow(ctk.CTkFrame):
 
         self.bind("<Button-1>", self._on_click)
         for child in self.winfo_children():
+            # The drag handle owns Button-1 for reordering; don't override it.
+            if child is self._handle:
+                continue
             child.bind("<Button-1>", self._on_click)
 
     def _add_info(self) -> None:
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(side="left", fill="x", expand=True)
 
-        ctk.CTkLabel(
+        self._name_lbl = ctk.CTkLabel(
             frame, text=self.file_path.name, anchor="w",
             font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(fill="x")
+        )
+        self._name_lbl.pack(fill="x")
 
         self._subtitle_lbl = ctk.CTkLabel(
             frame, text=self._subtitle(),

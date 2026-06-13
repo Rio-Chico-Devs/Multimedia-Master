@@ -1,11 +1,14 @@
+import hashlib
 import threading
 import customtkinter as ctk
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from typing import Callable
 
+from common.settings import Settings
 from core.formats import INPUT_EXTS
 from ui.file_row import FileRow
+from ui.batch_rename import BatchRenameDialog
 from ui.widgets import adaptive_wraplength
 
 
@@ -31,8 +34,10 @@ class FileListPanel(ctk.CTkFrame):
         self._on_select  = on_select   # called with FileRow when a row is clicked
         self._rows: list[FileRow] = []
         self._selected: FileRow | None = None
+        self._drag_row: FileRow | None = None
+        self._settings = Settings("image_converter")
 
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=1)
         self.grid_columnconfigure(0, weight=1)
         self._build()
 
@@ -51,7 +56,10 @@ class FileListPanel(ctk.CTkFrame):
             self._empty_lbl.pack_forget()
         row = FileRow(self._list_frame, path,
                       on_remove=self._remove_row,
-                      on_select=self._select_row)
+                      on_select=self._select_row,
+                      on_drag_start=self._drag_start,
+                      on_drag_motion=self._drag_motion,
+                      on_drag_end=self._drag_end)
         row.pack(fill="x", pady=3, padx=4)
         self._rows.append(row)
         self._refresh_count()
@@ -80,8 +88,31 @@ class FileListPanel(ctk.CTkFrame):
 
     def _build(self) -> None:
         self._build_drop_zone()
+        self._build_toolbar()
         self._build_list()
         self._build_bottom_bar()
+
+    def _build_toolbar(self) -> None:
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 2))
+
+        self._rename_btn = ctk.CTkButton(
+            bar, text="✎  Rinomina", width=110, height=28,
+            fg_color="#2a2a2a", hover_color="#3a3a3a",
+            command=self._open_rename)
+        self._rename_btn.pack(side="left", padx=(0, 4))
+
+        self._dedup_btn = ctk.CTkButton(
+            bar, text="⧉  Rimuovi duplicati", width=150, height=28,
+            fg_color="#2a2a2a", hover_color="#3a3a3a",
+            command=self._remove_duplicates)
+        self._dedup_btn.pack(side="left", padx=4)
+
+        self._clear_btn = ctk.CTkButton(
+            bar, text="🗑  Svuota", width=90, height=28,
+            fg_color="#2a2a2a", hover_color="#3a3a3a",
+            command=self._clear_all)
+        self._clear_btn.pack(side="left", padx=4)
 
     def _build_drop_zone(self) -> None:
         self._drop_zone = ctk.CTkFrame(
@@ -110,7 +141,7 @@ class FileListPanel(ctk.CTkFrame):
 
     def _build_list(self) -> None:
         self._list_frame = ctk.CTkScrollableFrame(self, label_text="File in coda")
-        self._list_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=4)
+        self._list_frame.grid(row=2, column=0, sticky="nsew", padx=10, pady=4)
         self._list_frame.grid_columnconfigure(0, weight=1)
 
         self._empty_lbl = ctk.CTkLabel(
@@ -122,7 +153,7 @@ class FileListPanel(ctk.CTkFrame):
 
     def _build_bottom_bar(self) -> None:
         bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.grid(row=2, column=0, sticky="ew", padx=10, pady=(4, 10))
+        bar.grid(row=3, column=0, sticky="ew", padx=10, pady=(4, 10))
 
         self._progress = ctk.CTkProgressBar(bar, height=8)
         self._progress.pack(fill="x", pady=(0, 8))
@@ -174,9 +205,17 @@ class FileListPanel(ctk.CTkFrame):
 
     # ── Internal ───────────────────────────────────────────────────────────────
 
+    def _last_dir(self) -> str | None:
+        """Most recently used folder, if it still exists — for dialog initialdir."""
+        for d in self._settings.get_recent("recent_dirs"):
+            if Path(d).is_dir():
+                return d
+        return None
+
     def _browse_files(self) -> None:
         paths = filedialog.askopenfilenames(
             title="Seleziona immagini",
+            initialdir=self._last_dir(),
             filetypes=[
                 ("Immagini supportate",
                  "*.jpg *.jpeg *.png *.webp *.bmp *.gif *.tiff *.tif"),
@@ -185,11 +224,15 @@ class FileListPanel(ctk.CTkFrame):
         )
         for p in paths:
             self.add_file(Path(p))
+        if paths:
+            self._settings.add_recent(str(Path(paths[0]).parent), "recent_dirs")
 
     def _browse_folder(self) -> None:
-        folder = filedialog.askdirectory(title="Seleziona cartella")
+        folder = filedialog.askdirectory(title="Seleziona cartella",
+                                         initialdir=self._last_dir())
         if not folder:
             return
+        self._settings.add_recent(folder, "recent_dirs")
         self.set_status("Scansione cartella…")
         threading.Thread(
             target=self._scan_folder_bg,
@@ -229,6 +272,113 @@ class FileListPanel(ctk.CTkFrame):
         row.set_selected(True)
         if self._on_select:
             self._on_select(row)
+
+    # ── Drag to reorder ──────────────────────────────────────────────────────
+
+    def _drag_start(self, row: FileRow, _event) -> None:
+        self._drag_row = row
+        row.configure(fg_color="#2a4a6c")
+
+    def _drag_motion(self, row: FileRow, event) -> None:
+        if self._drag_row is None:
+            return
+        y = event.y_root
+        try:
+            cur = self._rows.index(row)
+        except ValueError:
+            return
+        # Move the dragged row onto whichever row the pointer currently overlaps.
+        target = cur
+        for i, r in enumerate(self._rows):
+            if r is row or not r.winfo_exists():
+                continue
+            top = r.winfo_rooty()
+            if top <= y <= top + r.winfo_height():
+                target = i
+                break
+        if target != cur:
+            self._rows.insert(target, self._rows.pop(cur))
+            self._repack_rows()
+
+    def _drag_end(self, row: FileRow, _event) -> None:
+        if self._drag_row is not None:
+            # Restore the normal/selected colour now that the drag is over.
+            self._drag_row.set_selected(self._drag_row is self._selected)
+            self._drag_row = None
+
+    def _repack_rows(self) -> None:
+        for r in self._rows:
+            if r.winfo_exists():
+                r.pack_forget()
+        for r in self._rows:
+            if r.winfo_exists():
+                r.pack(fill="x", pady=3, padx=4)
+
+    # ── Queue actions: rename / dedup / clear ────────────────────────────────
+
+    def _clear_all(self) -> None:
+        for row in list(self._rows):
+            self._remove_row(row)
+
+    def _open_rename(self) -> None:
+        if not self._rows:
+            messagebox.showinfo("Rinomina", "Aggiungi prima delle immagini.")
+            return
+        BatchRenameDialog(self, [r.file_path for r in self._rows],
+                          on_apply=self._apply_rename)
+
+    def _apply_rename(self, mapping: dict[Path, Path]) -> None:
+        """mapping: {old_path: new_path} for files renamed on disk."""
+        renamed = 0
+        for row in self._rows:
+            new = mapping.get(row.file_path)
+            if new and new != row.file_path:
+                row.file_path = new
+                row.refresh_name()
+                renamed += 1
+        self.set_status(f"✎ {renamed} file rinominati" if renamed
+                        else "Nessun file rinominato")
+
+    def _remove_duplicates(self) -> None:
+        if not self._rows:
+            return
+        self._dedup_btn.configure(state="disabled")
+        self.set_status("Ricerca duplicati (hash dei contenuti)…")
+        items = [(r, r.file_path) for r in self._rows]
+        threading.Thread(target=self._dedup_bg, args=(items,),
+                         daemon=True).start()
+
+    def _dedup_bg(self, items: list) -> None:
+        seen: dict[str, FileRow] = {}
+        dupes: list[FileRow] = []
+        for row, path in items:
+            try:
+                h = self._hash_file(path)
+            except Exception:
+                continue
+            if h in seen:
+                dupes.append(row)
+            else:
+                seen[h] = row
+        self.after(0, self._dedup_done, dupes)
+
+    @staticmethod
+    def _hash_file(path: Path, chunk: int = 1 << 20) -> str:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for block in iter(lambda: fh.read(chunk), b""):
+                h.update(block)
+        return h.hexdigest()
+
+    def _dedup_done(self, dupes: list) -> None:
+        self._dedup_btn.configure(state="normal")
+        if not dupes:
+            self.set_status("Nessun duplicato trovato")
+            return
+        for row in dupes:
+            if row in self._rows:
+                self._remove_row(row)
+        self.set_status(f"⧉ {len(dupes)} duplicati rimossi dalla coda")
 
     def _on_drop(self, event) -> None:
         paths = self.tk.splitlist(event.data)

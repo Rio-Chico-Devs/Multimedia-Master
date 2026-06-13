@@ -4,6 +4,7 @@ from tkinter import messagebox
 
 from common.version import __version__
 from common.ui.geometry import fit_window
+from common.notify import notify
 from core.converter import ImageConverter
 from core.metadata_cleaner import MetadataCleaner
 from ui.file_list import FileListPanel
@@ -262,6 +263,9 @@ class MainWindow(ctk.CTk):
         elif ok == total and total > 0:
             color = "#4caf50"
             msg   = f"✓ {ok}/{total} {verb}"
+            # Only notify on full, unattended batches — a single file is instant.
+            if total >= 3:
+                notify("Convertitore Immagini", f"{ok} immagini {verb}")
         elif ok > 0:
             color = "#ff9800"
             msg   = f"✓ {ok}/{total} {verb}  ·  {total - ok} con errori"
