@@ -1,4 +1,5 @@
 import hashlib
+import re
 import threading
 import customtkinter as ctk
 from pathlib import Path
@@ -10,6 +11,11 @@ from core.formats import INPUT_EXTS
 from ui.file_row import FileRow
 from ui.batch_rename import BatchRenameDialog
 from ui.widgets import adaptive_wraplength
+
+# Matches the converter's output naming: "<stem>_converted" or
+# "<stem>_converted_<n>". Used to keep the watch folder from re-ingesting
+# files it just produced (see _is_conversion_output).
+_CONVERTED_RE = re.compile(r"_converted(_\d+)?$")
 
 
 class FileListPanel(ctk.CTkFrame):
@@ -453,11 +459,22 @@ class FileListPanel(ctk.CTkFrame):
                 for p in sorted(folder.rglob("*")):
                     if (p.is_file()
                             and p.suffix.lower() in INPUT_EXTS
+                            and not self._is_conversion_output(p)
                             and p not in self._watch_seen):
                         self._watch_seen.add(p)
                         self.after(0, self._on_watch_new_file, p)
             except Exception:
                 pass
+
+    @staticmethod
+    def _is_conversion_output(path: Path) -> bool:
+        """
+        True if the file looks like something the converter produced
+        (stem ends in '_converted' or '_converted_<n>'). Prevents the watch
+        loop from re-ingesting its own output and looping forever when the
+        output directory is the watched folder.
+        """
+        return bool(_CONVERTED_RE.search(path.stem))
 
     def _on_watch_new_file(self, path: Path) -> None:
         """Called on the main thread when the watcher discovers a new file."""
