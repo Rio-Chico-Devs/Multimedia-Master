@@ -256,10 +256,21 @@ class AudioEngine:
 
     def __init__(self):
         self._ffmpeg: str | None = self._find_ffmpeg()
-        if self._ffmpeg:
+        # Import pydub once here so every subsequent lazy import in methods
+        # hits the module cache instead of re-running the class body.
+        # pydub evaluates AudioSegment.converter = get_encoder_name() at
+        # class-definition time; without ffmpeg in PATH that emits a
+        # RuntimeWarning on every fresh import.  We suppress it here because
+        # the engine already handles the missing-ffmpeg case with explicit
+        # AudioResult(success=False) returns, making the warning redundant.
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.filterwarnings("ignore", category=RuntimeWarning, module="pydub")
             try:
                 from pydub import AudioSegment
-                AudioSegment.converter = self._ffmpeg
+                # Point pydub at the exact binary we found (or keep the pydub
+                # default "ffmpeg" string so it fails clearly at call time).
+                AudioSegment.converter = self._ffmpeg or "ffmpeg"
                 # ffprobe: imageio-ffmpeg ships only ffmpeg, not ffprobe.
                 # pydub can fall back to ffmpeg -i for metadata, so leave
                 # ffprobe unset rather than pointing to a non-existent path.

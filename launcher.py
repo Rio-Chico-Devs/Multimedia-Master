@@ -121,6 +121,8 @@ class Launcher(ctk.CTk):
             proc = subprocess.Popen(
                 [sys.executable, str(script)],
                 cwd=str(tool_dir),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
         except OSError as exc:
             from tkinter import messagebox
