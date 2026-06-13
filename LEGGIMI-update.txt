@@ -1,34 +1,82 @@
-AGGIORNAMENTO MULTIMEDIA MASTER — feature di workflow
-=======================================================
+ALLINEAMENTO LOCAL ALLA VERSIONE PIU' RECENTE (branch claude/file-converter-app-wVgG5)
+======================================================================================
 
-Come applicare:
-  Estrai "multimedia-master-update.zip" nella RADICE del tuo checkout locale
-  (la cartella che contiene "tools/"). I percorsi nello zip sono gia' relativi,
-  quindi i file finiscono al posto giusto sovrascrivendo quelli vecchi.
+Questo pacchetto contiene TUTTO cio' che e' presente nella versione piu' recente
+ma NON nel main: 38 file sorgente (nuovi o modificati). I percorsi sono relativi,
+quindi i file finiscono al posto giusto.
 
-  Da terminale, dalla radice del progetto:
-      unzip -o multimedia-master-update.zip
+-----------------------------------------------------------------
+PASSO 1 — Applicare i file aggiornati
+-----------------------------------------------------------------
+Dalla RADICE del tuo checkout locale (la cartella che contiene "tools/" e
+"launcher.py"):
 
-  I 3 file NUOVI non esistono ancora nel tuo local: verranno semplicemente creati.
+    unzip -o multimedia-master-update.zip
 
--------------------------------------------------------
-FILE NUOVI (creati, non esistono nel tuo local)
--------------------------------------------------------
-  tools/common/notify.py                      notifiche desktop cross-platform
-  tools/common/settings.py                    persistenza impostazioni (JSON)
-  tools/image_converter/ui/batch_rename.py    dialog rinomina batch
+L'opzione -o sovrascrive senza chiedere. I file nuovi vengono creati.
 
--------------------------------------------------------
-FILE MODIFICATI (sovrascrivono gli esistenti)
--------------------------------------------------------
-  tools/audio_manager/core/audio_engine.py    annullamento subprocess
-  tools/audio_manager/ui/convert_tab.py       pulsante Annulla + persistenza + notifiche
-  tools/audio_manager/ui/extract_tab.py       pulsante Annulla + notifiche
-  tools/audio_manager/ui/stems_tab.py         pulsante Annulla + notifiche
-  tools/image_converter/ui/file_list.py       toolbar, drag-reorder, dedup, rinomina, watch folder
-  tools/image_converter/ui/file_row.py        maniglia di trascinamento + refresh nome
-  tools/image_converter/ui/main_window.py     stima dimensioni output + notifiche
-  tools/image_converter/ui/preview_panel.py   slider prima/dopo
-  tools/image_converter/ui/sidebar.py         preset utente + persistenza + stima
+-----------------------------------------------------------------
+PASSO 2 (opzionale) — Rimuovere le cache obsolete
+-----------------------------------------------------------------
+Nel main erano committate delle cache compilate e un log che la versione nuova
+ha rimosso. NON servono e Python le rigenera da solo. Puoi cancellarle senza
+rischi. Dalla radice del progetto:
 
-Totale: 12 file (3 nuovi, 9 modificati).
+    find tools -name "__pycache__" -type d -exec rm -rf {} +
+    rm -f tools/audio_manager/crash.log
+
+(Se non le rimuovi non succede nulla di grave: sono solo file .pyc rigenerati.)
+
+-----------------------------------------------------------------
+CONTENUTO — 38 file sorgente
+-----------------------------------------------------------------
+RADICE
+  launcher.py                                   (modificato)
+  requirements.txt                              (modificato — controlla nuove dipendenze)
+
+COMMON (codice condiviso)
+  tools/common/crashlog.py                      (nuovo)
+  tools/common/notify.py                        (nuovo)
+  tools/common/settings.py                      (nuovo)
+  tools/common/version.py                       (nuovo)
+  tools/common/ui/geometry.py                   (nuovo)
+  tools/common/ui/widgets.py                    (modificato)
+
+CONVERTITORE IMMAGINI
+  tools/image_converter/app.py                  (modificato)
+  tools/image_converter/core/converter.py       (modificato)
+  tools/image_converter/core/metadata_cleaner.py(nuovo)
+  tools/image_converter/ui/batch_rename.py      (nuovo)
+  tools/image_converter/ui/file_list.py         (modificato)
+  tools/image_converter/ui/file_row.py          (modificato)
+  tools/image_converter/ui/main_window.py       (modificato)
+  tools/image_converter/ui/preview_panel.py     (modificato)
+  tools/image_converter/ui/sidebar.py           (modificato)
+  tools/image_converter/ui/widgets.py           (modificato)
+
+AUDIO MANAGER
+  tools/audio_manager/core/audio_engine.py      (modificato)
+  tools/audio_manager/ui/audio_window.py        (modificato)
+  tools/audio_manager/ui/clean_tab.py           (modificato)
+  tools/audio_manager/ui/convert_tab.py         (modificato)
+  tools/audio_manager/ui/edit_tab.py            (modificato)
+  tools/audio_manager/ui/enhance_tab.py         (modificato)
+  tools/audio_manager/ui/extract_tab.py         (modificato)
+  tools/audio_manager/ui/metadata_tab.py        (modificato)
+  tools/audio_manager/ui/stems_tab.py           (modificato)
+
+PDF MANAGER
+  tools/pdf_manager/app.py                       (modificato)
+  tools/pdf_manager/core/pdf_engine.py           (modificato)
+  tools/pdf_manager/ui/analyze_tab.py            (modificato)
+  tools/pdf_manager/ui/convert_tab.py            (modificato)
+  tools/pdf_manager/ui/edit_tab.py               (modificato)
+  tools/pdf_manager/ui/file_widgets.py           (modificato)
+  tools/pdf_manager/ui/merge_tab.py              (modificato)
+  tools/pdf_manager/ui/pdf_window.py             (modificato)
+  tools/pdf_manager/ui/protect_tab.py            (modificato)
+  tools/pdf_manager/ui/split_tab.py              (modificato)
+  tools/pdf_manager/ui/widgets.py                (modificato)
+
+Totale: 38 file (10 nuovi, 28 modificati).
+File rimossi nella versione nuova: 58 .pyc + 1 crash.log (vedi PASSO 2).
