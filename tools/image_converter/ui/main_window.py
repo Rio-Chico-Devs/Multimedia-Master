@@ -36,9 +36,11 @@ class MainWindow(ctk.CTk):
         self._converting      = False
         self._cancel_event    = threading.Event()
 
-        # Output-size estimate state
+        # Output-size estimate state. A monotonic generation counter — bumped
+        # only on the main thread — invalidates in-flight estimate threads, so a
+        # slow estimate for stale settings can never overwrite a newer result.
         self._estimate_after_id: str | None = None
-        self._estimate_cancel   = threading.Event()
+        self._estimate_gen      = 0
 
         self._init_dnd()
         self._build_ui()
@@ -121,8 +123,11 @@ class MainWindow(ctk.CTk):
             return None
         self._converting = True
         self._cancel_event.clear()
-        # Stop any running estimate — it would conflict with the batch converter.
-        self._estimate_cancel.set()
+        # Invalidate any pending/running estimate — it would race with the batch.
+        if self._estimate_after_id:
+            self.after_cancel(self._estimate_after_id)
+            self._estimate_after_id = None
+        self._estimate_gen += 1
         self._sidebar.set_estimate("")
         self._file_panel.set_converting(True)
         self._file_panel.set_progress(0)
@@ -139,7 +144,8 @@ class MainWindow(ctk.CTk):
         """Called when settings or file list change. Debounced 800 ms."""
         if self._estimate_after_id:
             self.after_cancel(self._estimate_after_id)
-        self._estimate_cancel.set()
+            self._estimate_after_id = None
+        self._estimate_gen += 1          # invalidate any pending/running estimate
         self._sidebar.set_estimate("")
         if not self._file_panel.rows or self._converting:
             return
@@ -150,7 +156,7 @@ class MainWindow(ctk.CTk):
         rows = self._file_panel.rows
         if not rows or self._converting:
             return
-        self._estimate_cancel.clear()
+        gen        = self._estimate_gen
         self._sidebar.set_estimate("Calcolo stima dimensioni…")
         config     = self._sidebar.get_config()
         first_path = rows[0].file_path
@@ -158,27 +164,27 @@ class MainWindow(ctk.CTk):
                       for r in rows if r.file_path.exists()]
         threading.Thread(
             target=self._run_estimate,
-            args=(first_path, config, all_sizes),
+            args=(gen, first_path, config, all_sizes),
             daemon=True,
         ).start()
 
-    def _run_estimate(self, src: Path,
+    def _run_estimate(self, gen: int, src: Path,
                       config: ConversionConfig,
                       all_sizes: list[int]) -> None:
         tmpdir = Path(tempfile.mkdtemp(prefix="mm_estimate_"))
         try:
+            if gen != self._estimate_gen:
+                return
             est_cfg = ConversionConfig(
                 format=config.format, quality=config.quality,
                 target_w=config.target_w, target_h=config.target_h,
                 strip_meta=config.strip_meta, output_dir=tmpdir,
             )
-            if self._estimate_cancel.is_set():
-                return
             result = self._converter.convert(src, est_cfg)
-            if self._estimate_cancel.is_set():
+            if gen != self._estimate_gen:
                 return
             if not result.success or not result.output.exists():
-                self.after(0, self._sidebar.set_estimate, "")
+                self.after(0, self._apply_estimate, gen, "")
                 return
 
             orig_size = src.stat().st_size
@@ -197,11 +203,16 @@ class MainWindow(ctk.CTk):
             text   = (f"Stima: {_fmt(total_orig)} → {_fmt(est_out)}"
                       f"  ({sign}{change:.0f}%  {config.format}"
                       f" q{config.quality})")
-            self.after(0, self._sidebar.set_estimate, text)
+            self.after(0, self._apply_estimate, gen, text)
         except Exception:
-            self.after(0, self._sidebar.set_estimate, "")
+            self.after(0, self._apply_estimate, gen, "")
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def _apply_estimate(self, gen: int, text: str) -> None:
+        """Apply an estimate result on the main thread, ignoring stale ones."""
+        if gen == self._estimate_gen:
+            self._sidebar.set_estimate(text)
 
     # ── Conversion orchestration ───────────────────────────────────────────────
 
