@@ -1,0 +1,34 @@
+AGGIORNAMENTO MULTIMEDIA MASTER — feature di workflow
+=======================================================
+
+Come applicare:
+  Estrai "multimedia-master-update.zip" nella RADICE del tuo checkout locale
+  (la cartella che contiene "tools/"). I percorsi nello zip sono gia' relativi,
+  quindi i file finiscono al posto giusto sovrascrivendo quelli vecchi.
+
+  Da terminale, dalla radice del progetto:
+      unzip -o multimedia-master-update.zip
+
+  I 3 file NUOVI non esistono ancora nel tuo local: verranno semplicemente creati.
+
+-------------------------------------------------------
+FILE NUOVI (creati, non esistono nel tuo local)
+-------------------------------------------------------
+  tools/common/notify.py                      notifiche desktop cross-platform
+  tools/common/settings.py                    persistenza impostazioni (JSON)
+  tools/image_converter/ui/batch_rename.py    dialog rinomina batch
+
+-------------------------------------------------------
+FILE MODIFICATI (sovrascrivono gli esistenti)
+-------------------------------------------------------
+  tools/audio_manager/core/audio_engine.py    annullamento subprocess
+  tools/audio_manager/ui/convert_tab.py       pulsante Annulla + persistenza + notifiche
+  tools/audio_manager/ui/extract_tab.py       pulsante Annulla + notifiche
+  tools/audio_manager/ui/stems_tab.py         pulsante Annulla + notifiche
+  tools/image_converter/ui/file_list.py       toolbar, drag-reorder, dedup, rinomina, watch folder
+  tools/image_converter/ui/file_row.py        maniglia di trascinamento + refresh nome
+  tools/image_converter/ui/main_window.py     stima dimensioni output + notifiche
+  tools/image_converter/ui/preview_panel.py   slider prima/dopo
+  tools/image_converter/ui/sidebar.py         preset utente + persistenza + stima
+
+Totale: 12 file (3 nuovi, 9 modificati).
