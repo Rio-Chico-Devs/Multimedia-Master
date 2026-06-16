@@ -23,15 +23,14 @@ class _ToolCard(ctk.CTkFrame):
         kw.setdefault("corner_radius", 14)
         kw.setdefault("border_width", 1)
         kw.setdefault("border_color", "#1f3a5c")
-        # Don't let the card shrink/grow to fit its label content: the width
-        # is driven top-down by the grid cell. Without this, the feature
-        # label's requested width (≈ its wraplength) would feed back into the
-        # card → column → window minimum, causing an endless resize loop.
+        # Fixed-size card. Nothing in this app ever measures or recomputes the
+        # layout: the window's native geometry manager stretches/shrinks the
+        # card via the grid cell (sticky + weight) and that is guaranteed
+        # stable. There is deliberately NO <Configure> handler that reacts to
+        # size by changing geometry — that pattern caused an endless
+        # resize loop and must never be reintroduced.
         super().__init__(parent, width=180, height=200, **kw)
-        # Children are packed, so pack_propagate(False) is what stops the
-        # card from shrinking/growing to its content. The grid cell (with
-        # sticky="nsew" + column weight) stretches the card to fill space.
-        self.pack_propagate(False)
+        self.pack_propagate(False)   # card keeps its size, ignores content
         self.configure(cursor="hand2")
         self._default_color = self.cget("fg_color")
 
@@ -41,19 +40,16 @@ class _ToolCard(ctk.CTkFrame):
                      font=ctk.CTkFont(size=15, weight="bold")).pack()
 
         feat_text = "  ·  ".join(features)
-        # wraplength is updated top-down by Launcher via set_wraplength();
-        # see the cards-container <Configure> binding. No self-binding here,
-        # so the label can never drive its own (or the card's) width.
-        self.feat_lbl = ctk.CTkLabel(self, text=feat_text,
-                                     text_color="#666",
-                                     font=ctk.CTkFont(size=10),
-                                     wraplength=150, justify="center")
-        self.feat_lbl.pack(fill="x", padx=12, pady=(6, 22))
+        # Fixed wraplength — never adjusted at runtime, so it can never trigger
+        # a resize feedback loop. 150 px fits comfortably inside the card at
+        # every supported window size.
+        ctk.CTkLabel(self, text=feat_text,
+                     text_color="#666",
+                     font=ctk.CTkFont(size=10),
+                     wraplength=150, justify="center").pack(
+            fill="x", padx=12, pady=(6, 22))
 
         self._bind_all(on_click)
-
-    def set_wraplength(self, logical_px: int) -> None:
-        self.feat_lbl.configure(wraplength=max(90, logical_px))
 
     def _bind_all(self, cmd):
         for w in [self, *self.winfo_children()]:
@@ -93,7 +89,6 @@ class Launcher(ctk.CTk):
         # of content, so the layout can never become lopsided.
         cards.grid_columnconfigure((0, 1, 2), weight=1, uniform="c")
         cards.grid_rowconfigure(0, weight=1)
-        self._cards_frame = cards
 
         self._cards = [
             _ToolCard(
@@ -125,36 +120,10 @@ class Launcher(ctk.CTk):
                 zip(self._cards, ((0, 8), 8, (8, 0)))):
             card.grid(row=0, column=col, sticky="nsew", padx=pad)
 
-        # Reflow the feature text top-down from the container width. The
-        # container is pack(fill=both, expand) so its width tracks the window,
-        # NOT the labels — reading it here is fully decoupled from wraplength,
-        # which is what kills the old infinite-resize feedback loop.
-        cards.bind("<Configure>", self._reflow_cards)
-
         ctk.CTkLabel(self,
                      text=f"v{__version__}  ·  open source  ·  nessuna connessione richiesta",
                      text_color="#333",
                      font=ctk.CTkFont(size=10)).pack(side="bottom", pady=10)
-
-    # ── Responsive reflow ────────────────────────────────────────────────────────
-
-    def _reflow_cards(self, event=None) -> None:
-        """Set each card's feature-text wraplength from the container width."""
-        total = self._cards_frame.winfo_width()
-        if total < 10:          # not laid out yet
-            return
-        # Per-card slice minus inter-card gaps and the label's internal padding.
-        per_card = total / 3 - 36
-        # winfo_width is physical px; CTk re-applies the DPI factor when we set
-        # wraplength, so convert to logical units first to avoid double scaling.
-        try:
-            rev = self._cards[0].feat_lbl._reverse_widget_scaling
-            per_card = rev(per_card)
-        except Exception:
-            pass
-        wl = max(90, int(per_card))
-        for card in self._cards:
-            card.set_wraplength(wl)
 
     # ── Launch ─────────────────────────────────────────────────────────────────
 

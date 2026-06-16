@@ -4,6 +4,8 @@ Shared UI primitives used by all Multimedia Master tools.
 Both app.py files add tools/ to sys.path so this is importable as:
     from common.ui.widgets import SectionLabel, Separator, StatusBar
 """
+import time
+
 import customtkinter as ctk
 
 
@@ -49,26 +51,72 @@ class StatusBar(ctk.CTkLabel):
 
 def adaptive_wraplength(label: ctk.CTkLabel, margin: int = 16) -> None:
     """
-    Keep a CTkLabel's wraplength in sync with its real width, so the text
-    reflows when the window is resized — no more clipping on small screens
-    and no narrow text column when maximised.
+    Keep a CTkLabel's wraplength roughly in sync with its width, so text
+    reflows when the window is resized — no clipping on small screens, no
+    over-narrow column when maximised.
 
-    The label must be laid out with fill="x" / sticky="ew" so its width
-    tracks the container.
+    SAFE BY DESIGN — three independent guards make it impossible for this to
+    hang the app, even if the label is laid out in a way where its width
+    depends on its own wraplength (a feedback loop):
+
+      1. DEBOUNCE   — bursts of <Configure> events are coalesced into a single
+                      update ~120 ms after motion stops, so dragging a window
+                      edge does almost no work.
+      2. HYSTERESIS — sub-threshold width changes (≤ 24 px) are ignored, so the
+                      wraplength never thrashes by a pixel or two.
+      3. CIRCUIT BREAKER — if more than a handful of updates fire within one
+                      second the only possible cause is a feedback loop, so the
+                      handler permanently switches itself off. Worst case the
+                      text simply stops reflowing; it can NEVER spin the CPU or
+                      trip an OS watchdog.
+
+    The label should be laid out with fill="x" / sticky="ew" so its width
+    tracks its container.
     """
-    def _on_resize(event) -> None:
-        w = event.width
-        try:
-            # CTk scales wraplength by the widget DPI factor on configure();
-            # event.width is physical px, so reverse the scaling first.
-            rev = getattr(label, "_reverse_widget_scaling", None)
-            if rev is not None:
+    st = {"after_id": None, "last": None, "times": [], "frozen": False}
+
+    def _compute(width_px: int) -> int:
+        w = width_px
+        # CTk re-applies the DPI factor when we set wraplength; event.width is
+        # physical px, so reverse the scaling first to avoid double-scaling.
+        rev = getattr(label, "_reverse_widget_scaling", None)
+        if rev is not None:
+            try:
                 w = rev(w)
-            w = max(80, int(w) - margin)
-            current = int(label.cget("wraplength") or 0)
-            if abs(w - current) > 10:        # avoid resize feedback loops
-                label.configure(wraplength=w)
+            except Exception:
+                pass
+        return max(80, int(w) - margin)
+
+    def _apply(target: int) -> None:
+        st["after_id"] = None
+        if st["frozen"]:
+            return
+        if st["last"] is not None and abs(target - st["last"]) <= 24:
+            return                                    # guard 2: hysteresis
+        now = time.monotonic()
+        st["times"] = [t for t in st["times"] if now - t < 1.0]
+        st["times"].append(now)
+        if len(st["times"]) >= 6:                     # guard 3: circuit breaker
+            st["frozen"] = True
+            return
+        st["last"] = target
+        try:
+            label.configure(wraplength=target)
         except Exception:
             pass
+
+    def _on_resize(event) -> None:
+        if st["frozen"]:
+            return
+        target = _compute(event.width)
+        if st["after_id"] is not None:                # guard 1: debounce
+            try:
+                label.after_cancel(st["after_id"])
+            except Exception:
+                pass
+        try:
+            st["after_id"] = label.after(120, lambda: _apply(target))
+        except Exception:
+            st["after_id"] = None
 
     label.bind("<Configure>", _on_resize, add="+")
