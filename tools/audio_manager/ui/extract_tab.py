@@ -12,6 +12,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, Separator, StatusBar
+from common.notify import notify
 from core.audio_engine import AudioEngine
 from core.formats import AUDIO_FORMATS, PRESETS, VIDEO_EXTS
 from .widgets import MediaFilePicker
@@ -25,6 +26,7 @@ class ExtractTab(ctk.CTkFrame):
         self._engine    = engine
         self._ffmpeg_ok = ffmpeg_ok
         self._out_dir: Path | None = None
+        self._cancel_event = threading.Event()
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -134,13 +136,19 @@ class ExtractTab(ctk.CTkFrame):
         bot.grid_columnconfigure(0, weight=1)
         self._status = StatusBar(bot)
         self._status.grid(row=0, column=0, sticky="ew")
+        self._btn_cancel = ctk.CTkButton(
+            bot, text="⏹  Annulla",
+            width=100, height=36, state="disabled",
+            fg_color="#5a1a1a", hover_color="#7a2a2a",
+            command=self._cancel)
+        self._btn_cancel.grid(row=0, column=1, padx=(8, 0))
         self._btn_run = ctk.CTkButton(
             bot, text="▶  Estrai audio",
             width=140, height=36,
             font=ctk.CTkFont(size=12, weight="bold"),
             state="disabled",
             command=self._run)
-        self._btn_run.grid(row=0, column=1, padx=(8, 0))
+        self._btn_run.grid(row=0, column=2, padx=(8, 0))
 
         self._on_preset_change()
 
@@ -196,13 +204,19 @@ class ExtractTab(ctk.CTkFrame):
         ext     = AUDIO_FORMATS[fmt].ext
         output  = out_dir / (video.stem + ext)
 
+        self._cancel_event.clear()
         self._btn_run.configure(state="disabled")
+        self._btn_cancel.configure(state="normal")
         self._progress.set(0)
         self._status.busy("Estrazione in corso…")
         threading.Thread(
             target=self._worker, args=(video, output, fmt, bitrate, sr),
             daemon=True,
         ).start()
+
+    def _cancel(self) -> None:
+        self._cancel_event.set()
+        self._status.busy("Annullamento…")
 
     def _worker(self, video, output, fmt, bitrate, sr) -> None:
         def _prog(p: float) -> None:
@@ -211,12 +225,21 @@ class ExtractTab(ctk.CTkFrame):
                        f"Estrazione… {int(p*100)}%")
 
         result = self._engine.extract_audio(video, output, fmt, bitrate, sr,
-                                             progress_cb=_prog)
+                                             progress_cb=_prog,
+                                             cancel_event=self._cancel_event)
         if result.success:
             sz = result.file_size / (1024 * 1024)
             self.after(0, self._status.ok,
                        f"Estratto: {output.name}  ({sz:.1f} MB)")
             self.after(0, self._progress.set, 1.0)
+            notify("Audio Manager", f"Estrazione completata: {output.name}")
+        elif result.error == "Annullato":
+            self.after(0, self._status.info, "⏹ Estrazione annullata")
+            self.after(0, self._progress.set, 0)
         else:
             self.after(0, self._status.err, result.error)
-        self.after(0, lambda: self._btn_run.configure(state="normal"))
+        self.after(0, self._done)
+
+    def _done(self) -> None:
+        self._btn_run.configure(state="normal")
+        self._btn_cancel.configure(state="disabled")

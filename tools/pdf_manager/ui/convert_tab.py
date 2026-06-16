@@ -21,8 +21,10 @@ class ConvertTab(ctk.CTkFrame):
     def __init__(self, parent, **kw):
         kw.setdefault("fg_color", "transparent")
         super().__init__(parent, **kw)
-        self._engine   = PdfEngine()
+        self._engine       = PdfEngine()
         self._out_dir: Path | None = None
+        self._cancel_event = threading.Event()
+        self._busy         = False
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -81,7 +83,7 @@ class ConvertTab(ctk.CTkFrame):
 
         Separator(right).pack(pady=(8, 0))
 
-        # Output name (only for single mode)
+        # Output name (single mode)
         SectionLabel(right, "Nome file output").pack(
             fill="x", padx=12, pady=(8, 2))
         self._name_entry = ctk.CTkEntry(right, placeholder_text="output.pdf")
@@ -103,11 +105,24 @@ class ConvertTab(ctk.CTkFrame):
 
         Separator(right).pack(pady=(8, 0))
 
-        # Actions
-        ctk.CTkButton(right, text="Converti",
-                      height=38,
-                      font=ctk.CTkFont(size=13, weight="bold"),
-                      command=self._run).pack(fill="x", padx=12, pady=(12, 4))
+        # Actions — Converti + ⏹ cancel on the same row
+        btn_row = ctk.CTkFrame(right, fg_color="transparent")
+        btn_row.pack(fill="x", padx=12, pady=(12, 4))
+        btn_row.grid_columnconfigure(0, weight=1)
+
+        self._convert_btn = ctk.CTkButton(
+            btn_row, text="Converti", height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._run)
+        self._convert_btn.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        self._cancel_btn = ctk.CTkButton(
+            btn_row, text="⏹", width=44, height=38,
+            fg_color="#5a1a1a", hover_color="#7a2a2a",
+            state="disabled",
+            command=self._cancel)
+        self._cancel_btn.grid(row=0, column=1, sticky="e")
+
         ctk.CTkButton(right, text="Pulisci lista",
                       height=30, fg_color="#2a2a2a", hover_color="#3a3a3a",
                       command=self._file_list.clear).pack(
@@ -127,27 +142,46 @@ class ConvertTab(ctk.CTkFrame):
             self._out_dir = Path(d)
             self._dir_lbl.configure(text=str(self._out_dir), text_color="white")
 
+    # ── Cancel ────────────────────────────────────────────────────────────
+
+    def _cancel(self):
+        self._cancel_event.set()
+        self._status.busy("Annullamento dopo il file corrente…")
+
     # ── Run ───────────────────────────────────────────────────────────────
 
     def _run(self):
+        if self._busy:
+            return
         images = self._file_list.get_paths()
         if not images:
             self._status.err("Nessuna immagine selezionata.")
             return
 
-        # Resolve output directory
         out_dir = self._out_dir or images[0].parent
-
-        # Output path (used only in "single" mode)
-        name = self._name_entry.get().strip() or "output.pdf"
+        name    = self._name_entry.get().strip() or "output.pdf"
         if not name.lower().endswith(".pdf"):
             name += ".pdf"
-        output = out_dir / name
+        output  = out_dir / name
 
-        ocr        = self._ocr_var.get()
-        one_per    = self._mode.get() == "per_file"
-        lang       = self._lang_entry.get().strip() or "ita+eng"
+        one_per = self._mode.get() == "per_file"
+        ocr     = self._ocr_var.get()
+        lang    = self._lang_entry.get().strip() or "ita+eng"
 
+        # Overwrite check applies only to single-file mode.
+        if not one_per and output.exists():
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                "Sovrascrivere?",
+                f"Il file esiste già:\n{output.name}\n\nSovrascrivere?",
+                icon="warning",
+            ):
+                return
+
+        self._busy = True
+        self._cancel_event.clear()
+        self._convert_btn.configure(state="disabled")
+        self._cancel_btn.configure(state="normal")
         self._status.busy("Conversione in corso…")
         self.update_idletasks()
 
@@ -159,18 +193,58 @@ class ConvertTab(ctk.CTkFrame):
 
     def _worker(self, images, output, ocr, one_per, lang):
         try:
-            results = self._engine.images_to_pdf(
-                images=images,
-                output=output,
-                ocr=ocr,
-                one_per_file=one_per,
-                lang=lang,
-            )
-            ok    = [r for r in results if r.success]
-            fail  = [r for r in results if not r.success]
-            msg   = f"{len(ok)} file creati"
-            if fail:
-                msg += f"  |  {len(fail)} errori: {fail[0].error}"
-            self.after(0, self._status.ok if not fail else self._status.err, msg)
+            if one_per:
+                # Process each image individually so cancel takes effect between files.
+                ok = fail = 0
+                total = len(images)
+                for i, img in enumerate(images):
+                    if self._cancel_event.is_set():
+                        self.after(0, self._done,
+                                   f"⏹ Annullato  ·  {ok}/{total} creati", "cancel")
+                        return
+                    self.after(0, self._status.busy, f"({i+1}/{total})  {img.name}")
+                    try:
+                        results = self._engine.images_to_pdf(
+                            images=[img],
+                            output=output.parent / f"{img.stem}.pdf",
+                            ocr=ocr,
+                            one_per_file=False,
+                            lang=lang,
+                        )
+                        if results and results[0].success:
+                            ok += 1
+                        else:
+                            fail += 1
+                    except Exception:
+                        fail += 1
+                msg = f"{ok} PDF creati"
+                if fail:
+                    msg += f"  ·  {fail} errori"
+                self.after(0, self._done, msg, "ok" if not fail else "err")
+            else:
+                results = self._engine.images_to_pdf(
+                    images=images,
+                    output=output,
+                    ocr=ocr,
+                    one_per_file=False,
+                    lang=lang,
+                )
+                ok   = [r for r in results if r.success]
+                fail = [r for r in results if not r.success]
+                msg  = f"{len(ok)} file creati"
+                if fail:
+                    msg += f"  |  {len(fail)} errori: {fail[0].error}"
+                self.after(0, self._done, msg, "ok" if not fail else "err")
         except Exception as exc:
-            self.after(0, self._status.err, str(exc))
+            self.after(0, self._done, str(exc), "err")
+
+    def _done(self, msg: str, status: str) -> None:
+        self._busy = False
+        self._convert_btn.configure(state="normal")
+        self._cancel_btn.configure(state="disabled")
+        if status == "ok":
+            self._status.ok(msg)
+        elif status == "cancel":
+            self._status.info(msg)
+        else:
+            self._status.err(msg)

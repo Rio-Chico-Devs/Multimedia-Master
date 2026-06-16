@@ -26,7 +26,8 @@ from pathlib import Path
 import customtkinter as ctk
 from PIL import Image, ImageTk
 
-from common.ui.widgets import SectionLabel, Separator, StatusBar
+from common.ui.widgets import (SectionLabel, Separator, StatusBar,
+                               adaptive_wraplength)
 from core.audio_engine import AudioEngine
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS
@@ -118,7 +119,9 @@ class MetadataTab(ctk.CTkFrame):
             text_color="#444", font=ctk.CTkFont(size=12))
         self._placeholder.grid(row=0, column=0, columnspan=4, padx=20, pady=40)
 
-        # Bottom bar
+        # Bottom bar — status on its own row, buttons on TWO elastic rows:
+        # a single fixed row (~750 px) clipped "Applica tutti" and "Salva"
+        # off-screen as soon as the window was narrower than ~780 px.
         bot = ctk.CTkFrame(self, fg_color="transparent")
         bot.grid(row=2, column=0, sticky="ew", padx=12, pady=(6, 0))
         bot.grid_columnconfigure(0, weight=1)
@@ -126,21 +129,30 @@ class MetadataTab(ctk.CTkFrame):
         self._status = StatusBar(bot)
         self._status.grid(row=0, column=0, sticky="ew")
 
+        btns = ctk.CTkFrame(bot, fg_color="transparent")
+        btns.grid(row=1, column=0, sticky="ew", pady=(6, 0))
+        for c in range(4):
+            btns.grid_columnconfigure(c, weight=1, uniform="metabtn")
+
         btn_cfg = [
-            ("_btn_analyze",    "🔍 Analizza",        110, _BTN_DARK,                          self._analyze),
-            ("_btn_export",     "📄 Export report",   120, _BTN_DARK,                          self._export),
-            ("_btn_copy",       "⎘ Copia tag",        100, _BTN_DARK,                          self._copy_tags),
-            ("_btn_wipe_all",   "🗑 Wipe tutti",       100, {"fg_color":"#7a1c1c","hover_color":"#9a2c2c"}, self._wipe_all),
-            ("_btn_wipe",       "🗑 Wipe sel.",         90, {"fg_color":"#7a1c1c","hover_color":"#9a2c2c"}, self._wipe),
-            ("_btn_apply_all",  "↕ Applica tutti",    115, _BTN_DARK,                          self._apply_all),
-            ("_btn_save",       "💾 Salva",             80, {},                                 self._save),
+            ("_btn_analyze",    "🔍 Analizza",        _BTN_DARK,                          self._analyze),
+            ("_btn_export",     "📄 Export report",   _BTN_DARK,                          self._export),
+            ("_btn_copy",       "⎘ Copia tag",        _BTN_DARK,                          self._copy_tags),
+            ("_btn_apply_all",  "↕ Applica tutti",    _BTN_DARK,                          self._apply_all),
+            ("_btn_wipe_all",   "🗑 Wipe tutti",       {"fg_color":"#7a1c1c","hover_color":"#9a2c2c"}, self._wipe_all),
+            ("_btn_wipe",       "🗑 Wipe sel.",        {"fg_color":"#7a1c1c","hover_color":"#9a2c2c"}, self._wipe),
+            ("_btn_save",       "💾 Salva",            {},                                 self._save),
         ]
-        for col, (attr, text, w, kw_extra, cmd) in enumerate(btn_cfg, start=1):
+        for i, (attr, text, kw_extra, cmd) in enumerate(btn_cfg):
             btn = ctk.CTkButton(
-                bot, text=text, width=w, height=36,
+                btns, text=text, height=34,
                 font=ctk.CTkFont(size=11, weight="bold"),
                 state="disabled", command=cmd, **kw_extra)
-            btn.grid(row=0, column=col, padx=(4 if col > 1 else 8, 0))
+            r, c = divmod(i, 4)
+            # last row: Save spans the remaining columns for prominence
+            colspan = 2 if attr == "_btn_save" else 1
+            btn.grid(row=r, column=c, columnspan=colspan,
+                     sticky="ew", padx=2, pady=2)
             setattr(self, attr, btn)
 
     # ── File list ──────────────────────────────────────────────────────────
@@ -369,11 +381,13 @@ class MetadataTab(ctk.CTkFrame):
             self._field_entries[raw_key] = entry
         else:
             val_text = f["value"] if len(f["value"]) <= 90 else f["value"][:87] + "…"
-            ctk.CTkLabel(
+            val_lbl = ctk.CTkLabel(
                 row, text=val_text or "—", anchor="w",
                 font=ctk.CTkFont(size=10), text_color="#888888",
                 wraplength=320, justify="left",
-            ).grid(row=0, column=2, sticky="ew", padx=(0, 4), pady=2)
+            )
+            val_lbl.grid(row=0, column=2, sticky="ew", padx=(0, 4), pady=2)
+            adaptive_wraplength(val_lbl)
 
         # Col 3 — delete button
         if deletable:
@@ -565,7 +579,7 @@ class MetadataTab(ctk.CTkFrame):
         win = ctk.CTkToplevel(self)
         win.title("Analisi file")
         win.geometry("520x340")
-        win.resizable(False, False)
+        win.minsize(420, 280)
         win.grab_set()
         win.configure(fg_color="#1a3a1a" if safe else "#3a1a1a")
         box = ctk.CTkTextbox(win, font=ctk.CTkFont(family="Courier", size=11),

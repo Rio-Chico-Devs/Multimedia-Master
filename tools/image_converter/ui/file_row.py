@@ -1,3 +1,4 @@
+import threading
 import customtkinter as ctk
 from pathlib import Path
 from PIL import Image
@@ -11,6 +12,7 @@ class FileRow(ctk.CTkFrame):
     Displays a single queued file: thumbnail, name, size, dimensions,
     a remove button, and a status label updated after conversion.
     Supports click-to-select with visual highlight.
+    Thumbnail is decoded in a background thread — widget creation is instant.
     """
 
     THUMB_SIZE     = 48
@@ -23,14 +25,30 @@ class FileRow(ctk.CTkFrame):
         file_path: Path,
         on_remove:  Callable,
         on_select:  Callable | None = None,
+        on_drag_start:  Callable | None = None,
+        on_drag_motion: Callable | None = None,
+        on_drag_end:    Callable | None = None,
         **kw,
     ):
         super().__init__(parent, corner_radius=8, **kw)
         self.file_path  = file_path
         self._on_select = on_select
+        self._on_drag_start  = on_drag_start
+        self._on_drag_motion = on_drag_motion
+        self._on_drag_end    = on_drag_end
         self._result:   ConversionResult | None = None
         self._selected  = False
+        self._dims      = ""
         self._build(on_remove)
+        # Kick off thumbnail decode — never blocks the main thread.
+        threading.Thread(target=self._load_thumb, daemon=True).start()
+
+    # ── Public API ─────────────────────────────────────────────────────────────
+
+    def refresh_name(self) -> None:
+        """Re-read name/size after the file was renamed or moved on disk."""
+        self._name_lbl.configure(text=self.file_path.name)
+        self._subtitle_lbl.configure(text=self._subtitle())
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -62,7 +80,26 @@ class FileRow(ctk.CTkFrame):
     # ── Build ──────────────────────────────────────────────────────────────────
 
     def _build(self, on_remove) -> None:
-        self._add_thumbnail()
+        s = self.THUMB_SIZE
+
+        # Drag handle — grab here to reorder the queue.
+        self._handle = ctk.CTkLabel(
+            self, text="⠿", width=16, text_color="#666",
+            font=ctk.CTkFont(size=16), cursor="fleur")
+        self._handle.pack(side="left", padx=(8, 0), pady=8)
+        if self._on_drag_start:
+            self._handle.bind("<ButtonPress-1>",
+                              lambda e: self._on_drag_start(self, e))
+            self._handle.bind("<B1-Motion>",
+                              lambda e: self._on_drag_motion(self, e))
+            self._handle.bind("<ButtonRelease-1>",
+                              lambda e: self._on_drag_end(self, e))
+
+        # Placeholder shown while thumbnail loads in background.
+        self._thumb_lbl = ctk.CTkLabel(
+            self, text="🖼", font=ctk.CTkFont(size=22), width=s)
+        self._thumb_lbl.pack(side="left", padx=(6, 6), pady=8)
+
         self._add_info()
 
         self._status_lbl = ctk.CTkLabel(self, text="", width=80,
@@ -75,52 +112,62 @@ class FileRow(ctk.CTkFrame):
             command=lambda: on_remove(self),
         ).pack(side="right", padx=(0, 8))
 
-        # click anywhere on the row to select
         self.bind("<Button-1>", self._on_click)
         for child in self.winfo_children():
+            # The drag handle owns Button-1 for reordering; don't override it.
+            if child is self._handle:
+                continue
             child.bind("<Button-1>", self._on_click)
-
-    def _add_thumbnail(self) -> None:
-        s = self.THUMB_SIZE
-        try:
-            pil = Image.open(self.file_path)
-            pil.thumbnail((s, s), Image.LANCZOS)
-            self._thumb = ctk.CTkImage(pil, size=(min(s, pil.width), min(s, pil.height)))
-            ctk.CTkLabel(self, image=self._thumb, text="").pack(
-                side="left", padx=(10, 6), pady=8)
-        except Exception:
-            ctk.CTkLabel(self, text="🖼", font=ctk.CTkFont(size=22), width=s).pack(
-                side="left", padx=(10, 6), pady=8)
 
     def _add_info(self) -> None:
         frame = ctk.CTkFrame(self, fg_color="transparent")
         frame.pack(side="left", fill="x", expand=True)
 
-        ctk.CTkLabel(
+        self._name_lbl = ctk.CTkLabel(
             frame, text=self.file_path.name, anchor="w",
             font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(fill="x")
+        )
+        self._name_lbl.pack(fill="x")
 
-        ctk.CTkLabel(
+        self._subtitle_lbl = ctk.CTkLabel(
             frame, text=self._subtitle(),
             anchor="w", text_color="gray",
             font=ctk.CTkFont(size=11),
-        ).pack(fill="x")
+        )
+        self._subtitle_lbl.pack(fill="x")
 
     def _subtitle(self) -> str:
         size_b   = self.file_path.stat().st_size
         size_str = (f"{size_b / 1024:.0f} KB" if size_b < 1_048_576
                     else f"{size_b / 1_048_576:.2f} MB")
-        fmt  = self.file_path.suffix[1:].upper()
-        dims = self._get_dims()
-        return f"{size_str}  ·  {fmt}  ·  {dims}"
+        fmt = self.file_path.suffix[1:].upper()
+        dims = f"  ·  {self._dims}" if self._dims else ""
+        return f"{size_str}  ·  {fmt}{dims}"
 
-    def _get_dims(self) -> str:
+    # ── Async thumbnail loading ────────────────────────────────────────────────
+
+    def _load_thumb(self) -> None:
+        s = self.THUMB_SIZE
         try:
-            w, h = Image.open(self.file_path).size
-            return f"{w}×{h} px"
+            pil = Image.open(self.file_path)
+            w, h = pil.width, pil.height
+            pil.draft("RGB", (s * 2, s * 2))
+            pil.thumbnail((s, s), Image.LANCZOS)
+            self.after(0, self._update_thumb, pil, f"{w}×{h} px")
         except Exception:
-            return ""
+            pass
+
+    def _update_thumb(self, pil: Image.Image, dims: str) -> None:
+        try:
+            if not self.winfo_exists():
+                return
+            s = self.THUMB_SIZE
+            self._dims = dims
+            self._thumb = ctk.CTkImage(pil, size=(min(s, pil.width), min(s, pil.height)))
+            self._thumb_lbl.configure(image=self._thumb, text="")
+            self._subtitle_lbl.configure(text=self._subtitle())
+        except Exception:
+            pass
 
     def _on_click(self, _event=None) -> None:
         if self._on_select:

@@ -6,6 +6,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 # Shared imports (common/)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Crash logging FIRST — on Windows the tool has no console, so without
+# this every exception (incl. C-extension crashes) is silently lost.
+from common.crashlog import install as _install_crashlog
+_install_crashlog(Path(__file__).parent / "crash.log")
+
 import customtkinter as ctk
 from ui.pdf_window import PdfWindow
 

@@ -98,7 +98,9 @@ class ImageFileList(ctk.CTkFrame):
         # Toolbar
         bar = ctk.CTkFrame(self, fg_color="transparent")
         bar.pack(fill="x", padx=8, pady=(8, 4))
-        ctk.CTkLabel(bar, text="Immagini da convertire",
+        # Short title: with 3 buttons on the same row, a long label pushed
+        # "+ File" out of view when the window was at minimum width.
+        ctk.CTkLabel(bar, text="Immagini",
                      font=ctk.CTkFont(size=12, weight="bold"),
                      anchor="w").pack(side="left")
         ctk.CTkButton(bar, text="✕ Rimuovi", width=88, height=26,
@@ -304,8 +306,8 @@ class PdfMergeList(ctk.CTkFrame):
             w.destroy()
         if not self._paths:
             ctk.CTkLabel(self._scroll,
-                         text="Trascina PDF qui oppure usa "+ PDF_EXT + " File",
-                         text_color="gray",
+                         text="Trascina PDF qui\noppure usa il bottone «+ PDF»",
+                         text_color="gray", justify="center",
                          font=ctk.CTkFont(size=12)).pack(pady=30)
 
     def _browse(self):

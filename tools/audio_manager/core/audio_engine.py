@@ -20,6 +20,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -45,45 +47,63 @@ def safe_tempfile(suffix: str = "") -> Path:
 
 VOICE_EFFECTS: dict[str, tuple[str, str]] = {
     "robot": (
-        "🤖 Robotica  —  voce metallica con eco digitale e flanger",
-        "aecho=1:0.88:60:0.4,"
-        "flanger=delay=0:depth=2:speed=0.5:width=70:phase=25,"
-        "aphaser=type=q:rate=2:depth=0.7",
+        "🤖 Robotica  —  modulazione ad anello (AM 60 Hz) + eco metallico + phaser",
+        # AM modulation at 60 Hz via tremolo simulates ring-modulator "buzz".
+        # Heavy compressor first to flatten dynamics, making the modulation audible.
+        # threshold=0.056 ≈ -25 dBFS (linear); makeup=2.51 ≈ +8 dB (linear).
+        "acompressor=threshold=0.056:ratio=20:attack=5:release=100:makeup=2.51,"
+        "tremolo=f=60:d=0.9,"
+        "aphaser=in_gain=0.4:out_gain=0.74:delay=3:decay=0.4:speed=0.5:type=t,"
+        "aecho=1:0.8:15|30:0.5|0.3,"
+        "alimiter=level_out=0.9",
     ),
     "evil": (
-        "😈 Malvagia  —  tono basso, coro sinistro, riverbero cupo",
-        # -4 semitones: F = 2^(-4/12) ≈ 0.7937 → asetrate=35012, atempo=1.260
-        "asetrate=35012,aresample=44100,atempo=1.260,"
-        "chorus=0.5:0.9:50|60:0.4|0.32:0.25|0.4:2|1.3,"
-        "aecho=0.7:0.85:800|1500:0.2|0.12",
+        "😈 Malvagia  —  -8 semitoni, EQ scuro, riverbero abissale",
+        # -8 semitones: F = 2^(-8/12) = 0.6300 → asetrate=27783, atempo=1.587
+        "asetrate=27783,aresample=44100,atempo=1.587,"
+        "lowpass=f=8000,bass=g=6,treble=g=-6,"
+        "aecho=0.9:0.9:1200|2000|3000:0.4|0.3|0.2,"
+        # threshold=0.1 ≈ -20 dBFS; makeup=1.41 ≈ +3 dB (linear, not dB string).
+        "acompressor=threshold=0.1:ratio=4:attack=5:release=200:makeup=1.41,"
+        "alimiter=level_out=0.9",
     ),
     "zombie": (
-        "🧟 Zombie  —  voce gutturale con tremolo e riverbero decadente",
-        # -6 semitones: F = 2^(-6/12) ≈ 0.7071 → asetrate=31183, atempo=1.414
-        "asetrate=31183,aresample=44100,atempo=1.414,"
-        "tremolo=f=6:d=0.5,"
-        "aecho=0.8:0.88:500|1000:0.2|0.1",
+        "🧟 Zombie  —  -7 semitoni, bitcrusher, tremolo lento, riverbero decadente",
+        # -7 semitones: F = 2^(-7/12) = 0.6674 → asetrate=29433, atempo=1.498
+        "asetrate=29433,aresample=44100,atempo=1.498,"
+        "acrusher=level_in=4:level_out=0.5:bits=14:mode=log:aa=1,"
+        "tremolo=f=5:d=0.6,"
+        "bass=g=3,"
+        "aecho=0.8:0.85:400|800|1500:0.3|0.2|0.1,"
+        "alimiter=level_out=0.9",
     ),
     "psychic": (
-        "🌀 Telecinesi  —  voce eterea, riverbero ampio e pitch elevato",
-        # +2 semitones: F = 2^(2/12) ≈ 1.1225 → asetrate=49502, atempo=0.891
-        "asetrate=49502,aresample=44100,atempo=0.891,"
-        "aecho=0.9:0.9:800|1200|1600:0.3|0.25|0.2,"
-        "aphaser=type=q:rate=0.4:depth=0.8",
+        "🌀 Telecinesi  —  +3 semitoni, vibrato, riverbero enorme, phaser etereo",
+        # +3 semitones: F = 2^(3/12) = 1.1892 → asetrate=52444, atempo=0.841
+        "asetrate=52444,aresample=44100,atempo=0.841,"
+        "vibrato=f=3:d=0.3,"
+        "aphaser=in_gain=0.6:out_gain=0.8:delay=3:decay=0.5:speed=0.3:type=q,"
+        "aecho=0.95:0.95:500|1000|2000|3500:0.5|0.4|0.3|0.2,"
+        "treble=g=2,"
+        "alimiter=level_out=0.9",
     ),
     "chibi": (
-        "🎀 Chibi  —  tono acuto kawaii con chorus vivace",
-        # +8 semitones: F = 2^(8/12) ≈ 1.5874 → asetrate=69986, atempo=0.630
-        "asetrate=69986,aresample=44100,atempo=0.630,"
-        "chorus=0.7:0.9:55:0.4:0.25:2,"
-        "volume=1.3",
+        "🎀 Chibi  —  +8 semitoni, EQ brillante, chorus doppio kawaii",
+        # +8 semitones: F = 2^(8/12) = 1.5874 → asetrate=70004, atempo=0.630
+        "asetrate=70004,aresample=44100,atempo=0.630,"
+        "treble=g=5,highpass=f=100,"
+        "chorus=0.8:0.9:40|55:0.3|0.25:0.3|0.4:1.5|2,"
+        "volume=1.5,"
+        "alimiter=level_out=0.9",
     ),
     "virtual": (
-        "👾 Ragazza virtuale  —  tono dolce elevato con flanger digitale",
-        # +5 semitones: F = 2^(5/12) ≈ 1.3348 → asetrate=58864, atempo=0.749
-        "asetrate=58864,aresample=44100,atempo=0.749,"
-        "chorus=0.6:0.9:50:0.4:0.25:2,"
-        "flanger=delay=0:depth=2:speed=1:width=50:phase=25",
+        "👾 Ragazza virtuale  —  +5 semitoni, flanger digitale, chorus anime",
+        # +5 semitones: F = 2^(5/12) = 1.3348 → asetrate=58867, atempo=0.749
+        "asetrate=58867,aresample=44100,atempo=0.749,"
+        "treble=g=3,"
+        "flanger=delay=0:depth=3:speed=0.8:width=60:phase=25:shape=sinusoidal:interp=linear,"
+        "chorus=0.6:0.9:45|60:0.3|0.25:0.25|0.35:1.5|2,"
+        "alimiter=level_out=0.9",
     ),
 }
 
@@ -236,10 +256,21 @@ class AudioEngine:
 
     def __init__(self):
         self._ffmpeg: str | None = self._find_ffmpeg()
-        if self._ffmpeg:
+        # Import pydub once here so every subsequent lazy import in methods
+        # hits the module cache instead of re-running the class body.
+        # pydub evaluates AudioSegment.converter = get_encoder_name() at
+        # class-definition time; without ffmpeg in PATH that emits a
+        # RuntimeWarning on every fresh import.  We suppress it here because
+        # the engine already handles the missing-ffmpeg case with explicit
+        # AudioResult(success=False) returns, making the warning redundant.
+        import warnings as _w
+        with _w.catch_warnings():
+            _w.filterwarnings("ignore", category=RuntimeWarning, module="pydub")
             try:
                 from pydub import AudioSegment
-                AudioSegment.converter = self._ffmpeg
+                # Point pydub at the exact binary we found (or keep the pydub
+                # default "ffmpeg" string so it fails clearly at call time).
+                AudioSegment.converter = self._ffmpeg or "ffmpeg"
                 # ffprobe: imageio-ffmpeg ships only ffmpeg, not ffprobe.
                 # pydub can fall back to ffmpeg -i for metadata, so leave
                 # ffprobe unset rather than pointing to a non-existent path.
@@ -264,6 +295,60 @@ class AudioEngine:
             pass
         # 2 — system PATH fallback
         return shutil.which("ffmpeg")
+
+    # ── Cancellable subprocess runner ──────────────────────────────────────
+    # ffmpeg/demucs can run for minutes. subprocess.run() blocks with no way to
+    # abort, so we Popen, drain the captured pipe on a daemon thread (to avoid a
+    # full-pipe deadlock), and poll cancel_event every 100 ms. On cancel we
+    # terminate (then kill) the child. Returns (returncode, output_text, cancelled).
+
+    @staticmethod
+    def _run_cancellable(
+        cmd:          list[str],
+        cancel_event: "threading.Event | None" = None,
+        line_cb:      Callable[[str], None] | None = None,
+        merge_stderr: bool = False,
+    ) -> tuple[int | None, str, bool]:
+        pipe = subprocess.STDOUT if merge_stderr else subprocess.PIPE
+        proc = subprocess.Popen(
+            cmd,
+            stdout=(subprocess.PIPE if merge_stderr else subprocess.DEVNULL),
+            stderr=pipe,
+            encoding="utf-8",
+            errors="replace",
+        )
+        stream = proc.stdout if merge_stderr else proc.stderr
+        buf: list[str] = []
+
+        def _drain() -> None:
+            try:
+                for line in (stream or []):
+                    buf.append(line)
+                    if line_cb:
+                        line_cb(line)
+            except Exception:
+                pass
+
+        drainer = threading.Thread(target=_drain, daemon=True)
+        drainer.start()
+
+        cancelled = False
+        while proc.poll() is None:
+            if cancel_event is not None and cancel_event.is_set():
+                cancelled = True
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=3)
+                except Exception:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                break
+            time.sleep(0.1)
+
+        drainer.join(timeout=1)
+        return proc.returncode, "".join(buf), cancelled
 
     # ── Probe ─────────────────────────────────────────────────────────────
 
@@ -291,6 +376,7 @@ class AudioEngine:
                     [self._ffmpeg, "-i", str(path)],
                     stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
                     encoding="utf-8", errors="replace",
+                    timeout=15,
                 )
                 for line in result.stderr.splitlines():
                     if "Duration:" in line and duration_s == 0.0:
@@ -351,12 +437,13 @@ class AudioEngine:
 
     def convert(
         self,
-        src:         Path,
-        output:      Path,
-        fmt:         str,
-        bitrate:     int | None = None,   # kbps
-        sample_rate: int | None = None,   # Hz
-        channels:    int | None = None,
+        src:          Path,
+        output:       Path,
+        fmt:          str,
+        bitrate:      int | None = None,   # kbps
+        sample_rate:  int | None = None,   # Hz
+        channels:     int | None = None,
+        cancel_event: "threading.Event | None" = None,
     ) -> AudioResult:
         """Convert/compress audio to the target format using ffmpeg directly."""
         if not self._ffmpeg:
@@ -372,16 +459,15 @@ class AudioEngine:
                 cmd += ["-b:a", f"{bitrate}k"]
             cmd.append(str(output))
 
-            proc = subprocess.run(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-                encoding="utf-8",
-                errors="replace",
-            )
-            if proc.returncode != 0:
+            code, err_text, cancelled = self._run_cancellable(cmd, cancel_event)
+            if cancelled:
+                # Drop any partial output so it can't be mistaken for a result.
+                try: output.unlink(missing_ok=True)
+                except Exception: pass
+                return AudioResult(output=output, success=False, error="Annullato")
+            if code != 0:
                 # Return last 300 chars of stderr for a useful error message
-                err = proc.stderr.strip()[-300:] if proc.stderr else "Errore sconosciuto"
+                err = err_text.strip()[-300:] if err_text else "Errore sconosciuto"
                 return AudioResult(output=output, success=False, error=err)
             return self._ok(output)
         except Exception as exc:
@@ -391,18 +477,18 @@ class AudioEngine:
 
     def extract_audio(
         self,
-        video:       Path,
-        output:      Path,
-        fmt:         str = "mp3",
-        bitrate:     int | None = None,
-        sample_rate: int | None = None,
-        progress_cb: Callable[[float], None] | None = None,
+        video:        Path,
+        output:       Path,
+        fmt:          str = "mp3",
+        bitrate:      int | None = None,
+        sample_rate:  int | None = None,
+        progress_cb:  Callable[[float], None] | None = None,
+        cancel_event: "threading.Event | None" = None,
     ) -> AudioResult:
         """Extract the audio track from any video file using ffmpeg."""
         if not self._ffmpeg:
             return AudioResult(output=output, success=False,
                                error="ffmpeg non trovato. Installalo e aggiungilo al PATH.")
-        proc: subprocess.Popen | None = None
         try:
             cmd = [self._ffmpeg, "-y", "-i", str(video), "-vn"]
             if sample_rate:
@@ -411,45 +497,39 @@ class AudioEngine:
                 cmd += ["-b:a", f"{bitrate}k"]
             cmd.append(str(output))
 
-            proc = subprocess.Popen(
-                cmd,
-                stderr=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                encoding="utf-8",
-                errors="replace",
-            )
-            duration_s = 0.0
-            for line in (proc.stderr or []):
-                if "Duration:" in line and duration_s == 0.0:
+            # ffmpeg prints duration once, then per-frame "time=" progress. We
+            # parse both from the stderr stream drained by _run_cancellable.
+            state = {"duration": 0.0}
+
+            def _on_line(line: str) -> None:
+                if "Duration:" in line and state["duration"] == 0.0:
                     try:
                         t = line.split("Duration:")[1].split(",")[0].strip()
                         h, m, s = t.split(":")
-                        duration_s = int(h) * 3600 + int(m) * 60 + float(s)
+                        state["duration"] = int(h) * 3600 + int(m) * 60 + float(s)
                     except Exception:
                         pass
-                if "time=" in line and duration_s > 0 and progress_cb:
+                if "time=" in line and state["duration"] > 0 and progress_cb:
                     try:
                         t = line.split("time=")[1].split()[0]
                         h, m, s = t.split(":")
                         elapsed = int(h) * 3600 + int(m) * 60 + float(s)
-                        progress_cb(min(elapsed / duration_s, 1.0))
+                        progress_cb(min(elapsed / state["duration"], 1.0))
                     except Exception:
                         pass
-            proc.wait()
-            if proc.returncode != 0:
+
+            code, _, cancelled = self._run_cancellable(
+                cmd, cancel_event, line_cb=_on_line)
+            if cancelled:
+                try: output.unlink(missing_ok=True)
+                except Exception: pass
+                return AudioResult(output=output, success=False, error="Annullato")
+            if code != 0:
                 return AudioResult(output=output, success=False,
-                                   error=f"ffmpeg ha restituito codice {proc.returncode}.")
-            return self._ok(output, duration_s)
+                                   error=f"ffmpeg ha restituito codice {code}.")
+            return self._ok(output, state["duration"])
         except Exception as exc:
             return AudioResult(output=output, success=False, error=str(exc))
-        finally:
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except Exception:
-                    try: proc.kill()
-                    except Exception: pass
 
     # ── Enhance (noise reduction + normalize) ─────────────────────────────
 
@@ -526,8 +606,9 @@ class AudioEngine:
                 filters.append("equalizer=f=300:width_type=o:width=1:g=-2")
                 filters.append("equalizer=f=3500:width_type=o:width=1.5:g=2.5")
             if compress:
+                # threshold=0.063 ≈ -24 dBFS; makeup=1.26 ≈ +2 dB (linear).
                 filters.append(
-                    "acompressor=threshold=-24dB:ratio=3:attack=5:release=100:makeup=2dB")
+                    "acompressor=threshold=0.063:ratio=3:attack=5:release=100:makeup=1.26")
             if normalize:
                 filters.append("loudnorm=I=-16:TP=-1.5:LRA=11:print_format=none")
 
@@ -934,16 +1015,16 @@ class AudioEngine:
 
     def separate_stems(
         self,
-        src:         Path,
-        output_dir:  Path,
-        model:       str = "htdemucs",
-        progress_cb: Callable[[str], None] | None = None,
+        src:          Path,
+        output_dir:   Path,
+        model:        str = "htdemucs",
+        progress_cb:  Callable[[str], None] | None = None,
+        cancel_event: "threading.Event | None" = None,
     ) -> list[AudioResult]:
         """
         Separate a track into stems using demucs (external process).
         Outputs to output_dir/<model>/<track_name>/{vocals,drums,bass,other}.wav
         """
-        proc: subprocess.Popen | None = None
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
             cmd = [
@@ -952,22 +1033,20 @@ class AudioEngine:
                 "-n",    model,
                 str(src),
             ]
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                encoding="utf-8",
-                errors="replace",
-            )
-            for line in (proc.stdout or []):
+
+            def _on_line(line: str) -> None:
                 line = line.strip()
                 if line and progress_cb:
                     progress_cb(line)
-            proc.wait()
 
-            if proc.returncode != 0:
+            code, _, cancelled = self._run_cancellable(
+                cmd, cancel_event, line_cb=_on_line, merge_stderr=True)
+
+            if cancelled:
+                return [AudioResult(output=None, success=False, error="Annullato")]
+            if code != 0:
                 return [AudioResult(output=None, success=False,
-                                    error=f"demucs error (codice {proc.returncode}).")]
+                                    error=f"demucs error (codice {code}).")]
 
             stem_dir = output_dir / model / src.stem
             results  = [self._ok(f) for f in sorted(stem_dir.glob("*.wav"))
@@ -978,15 +1057,6 @@ class AudioEngine:
             return results
         except Exception as exc:
             return [AudioResult(output=None, success=False, error=str(exc))]
-        finally:
-            # Ensure demucs doesn't linger as an orphan on exception/cancel
-            if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=5)
-                except Exception:
-                    try: proc.kill()
-                    except Exception: pass
 
     # ── Metadata / Tags ───────────────────────────────────────────────────
 

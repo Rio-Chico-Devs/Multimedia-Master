@@ -4,10 +4,13 @@ from pathlib import Path
 
 import customtkinter as ctk
 
+ROOT = Path(__file__).parent
+sys.path.insert(0, str(ROOT / "tools"))
+from common.version import __version__
+from common.ui.geometry import fit_window
+
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
-
-ROOT = Path(__file__).parent
 
 
 # ── Card cliccabile ────────────────────────────────────────────────────────────
@@ -20,7 +23,14 @@ class _ToolCard(ctk.CTkFrame):
         kw.setdefault("corner_radius", 14)
         kw.setdefault("border_width", 1)
         kw.setdefault("border_color", "#1f3a5c")
-        super().__init__(parent, **kw)
+        # Fixed-size card. Nothing in this app ever measures or recomputes the
+        # layout: the window's native geometry manager stretches/shrinks the
+        # card via the grid cell (sticky + weight) and that is guaranteed
+        # stable. There is deliberately NO <Configure> handler that reacts to
+        # size by changing geometry — that pattern caused an endless
+        # resize loop and must never be reintroduced.
+        super().__init__(parent, width=180, height=200, **kw)
+        self.pack_propagate(False)   # card keeps its size, ignores content
         self.configure(cursor="hand2")
         self._default_color = self.cget("fg_color")
 
@@ -30,10 +40,14 @@ class _ToolCard(ctk.CTkFrame):
                      font=ctk.CTkFont(size=15, weight="bold")).pack()
 
         feat_text = "  ·  ".join(features)
+        # Fixed wraplength — never adjusted at runtime, so it can never trigger
+        # a resize feedback loop. 150 px fits comfortably inside the card at
+        # every supported window size.
         ctk.CTkLabel(self, text=feat_text,
                      text_color="#666",
                      font=ctk.CTkFont(size=10),
-                     wraplength=170, justify="center").pack(pady=(6, 22))
+                     wraplength=150, justify="center").pack(
+            fill="x", padx=12, pady=(6, 22))
 
         self._bind_all(on_click)
 
@@ -55,8 +69,7 @@ class Launcher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Multimedia Master")
-        self.geometry("900x360")
-        self.resizable(False, False)
+        fit_window(self, 900, 380, 640, 320)
         self._processes: list[subprocess.Popen] = []
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -71,37 +84,44 @@ class Launcher(ctk.CTk):
                      font=ctk.CTkFont(size=12)).pack(pady=(0, 22))
 
         cards = ctk.CTkFrame(self, fg_color="transparent")
-        cards.pack(fill="x", padx=40)
-        cards.grid_columnconfigure((0, 1, 2), weight=1)
+        cards.pack(fill="both", expand=True, padx=40)
+        # uniform="c" forces the three columns to stay equal width regardless
+        # of content, so the layout can never become lopsided.
+        cards.grid_columnconfigure((0, 1, 2), weight=1, uniform="c")
+        cards.grid_rowconfigure(0, weight=1)
 
-        _ToolCard(
-            cards,
-            icon="🖼",
-            title="Convertitore Immagini",
-            features=["JPG · PNG · WebP · AVIF", "Comprimi · Ridimensiona",
-                      "Profili · Anteprima"],
-            on_click=self._launch_image_converter,
-        ).grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        self._cards = [
+            _ToolCard(
+                cards,
+                icon="🖼",
+                title="Convertitore Immagini",
+                features=["JPG · PNG · WebP · AVIF", "Comprimi · Ridimensiona",
+                          "Profili · Anteprima"],
+                on_click=self._launch_image_converter,
+            ),
+            _ToolCard(
+                cards,
+                icon="📄",
+                title="Gestione PDF",
+                features=["Converti · OCR · Unisci", "Dividi · Proteggi",
+                          "Analizza · Sintesi"],
+                on_click=self._launch_pdf_manager,
+            ),
+            _ToolCard(
+                cards,
+                icon="🎵",
+                title="Audio Manager",
+                features=["Converti · Estrai da video", "Riduzione rumore · EQ",
+                          "Separa tracce · Metadati"],
+                on_click=self._launch_audio_manager,
+            ),
+        ]
+        for col, (card, pad) in enumerate(
+                zip(self._cards, ((0, 8), 8, (8, 0)))):
+            card.grid(row=0, column=col, sticky="nsew", padx=pad)
 
-        _ToolCard(
-            cards,
-            icon="📄",
-            title="Gestione PDF",
-            features=["Converti · OCR · Unisci", "Dividi · Proteggi",
-                      "Analizza · Sintesi"],
-            on_click=self._launch_pdf_manager,
-        ).grid(row=0, column=1, sticky="nsew", padx=8)
-
-        _ToolCard(
-            cards,
-            icon="🎵",
-            title="Audio Manager",
-            features=["Converti · Estrai da video", "Riduzione rumore · EQ",
-                      "Separa tracce · Metadati"],
-            on_click=self._launch_audio_manager,
-        ).grid(row=0, column=2, sticky="nsew", padx=(8, 0))
-
-        ctk.CTkLabel(self, text="v2.0  ·  open source  ·  nessuna connessione richiesta",
+        ctk.CTkLabel(self,
+                     text=f"v{__version__}  ·  open source  ·  nessuna connessione richiesta",
                      text_color="#333",
                      font=ctk.CTkFont(size=10)).pack(side="bottom", pady=10)
 
@@ -110,11 +130,33 @@ class Launcher(ctk.CTk):
     def _launch(self, tool_name: str) -> None:
         script = ROOT / "tools" / tool_name / "app.py"
         tool_dir = script.parent
-        proc = subprocess.Popen(
-            [sys.executable, str(script)],
-            cwd=str(tool_dir),
-        )
+        try:
+            proc = subprocess.Popen(
+                [sys.executable, str(script)],
+                cwd=str(tool_dir),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            from tkinter import messagebox
+            messagebox.showerror(
+                "Avvio fallito",
+                f"Impossibile avviare {tool_name}:\n{exc}")
+            return
         self._processes.append(proc)
+        # If the tool dies within 2 s it crashed at import time —
+        # tell the user instead of failing silently.
+        self.after(2000, self._check_alive, proc, tool_name)
+
+    def _check_alive(self, proc: subprocess.Popen, tool_name: str) -> None:
+        rc = proc.poll()
+        if rc is not None and rc != 0:
+            from tkinter import messagebox
+            log = ROOT / "tools" / tool_name / "crash.log"
+            messagebox.showerror(
+                "Strumento terminato",
+                f"{tool_name} si è chiuso subito (codice {rc}).\n\n"
+                f"Controlla il log:\n{log}")
 
     def _launch_image_converter(self) -> None:
         self._launch("image_converter")

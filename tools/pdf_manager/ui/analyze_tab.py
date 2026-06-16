@@ -17,7 +17,8 @@ from pathlib import Path
 import customtkinter as ctk
 
 from .file_widgets  import SingleFilePicker
-from .widgets       import SectionLabel, Separator, StatusBar
+from .widgets       import (SectionLabel, Separator, StatusBar,
+                            adaptive_wraplength)
 from core.pdf_engine import PdfEngine, PdfAnalysis
 
 
@@ -165,9 +166,12 @@ class AnalyzeTab(ctk.CTkFrame):
                 fill="x", padx=12, pady=(12, 4))
             Separator(r).pack()
             text = ",  ".join(all_fields)
-            ctk.CTkLabel(r, text=text, anchor="w", wraplength=520,
-                         font=ctk.CTkFont(size=11),
-                         padx=16).pack(fill="x", pady=4)
+            fields_lbl = ctk.CTkLabel(r, text=text, anchor="w",
+                                      wraplength=520, justify="left",
+                                      font=ctk.CTkFont(size=11),
+                                      padx=16)
+            fields_lbl.pack(fill="x", pady=4)
+            adaptive_wraplength(fields_lbl, margin=36)
 
         # ── Summary ──────────────────────────────────────────────────────
         if a.summary:

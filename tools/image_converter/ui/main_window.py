@@ -1,8 +1,16 @@
+import shutil
+import tempfile
 import threading
 import customtkinter as ctk
+from pathlib import Path
 from tkinter import messagebox
 
+from common.version import __version__
+from common.ui.geometry import fit_window
+from common.notify import notify
 from core.converter import ImageConverter
+from core.formats import ConversionConfig
+from core.metadata_cleaner import MetadataCleaner
 from ui.file_list import FileListPanel
 from ui.file_row import FileRow
 from ui.sidebar import SettingsSidebar
@@ -18,12 +26,21 @@ class MainWindow(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Multimedia Master  —  Convertitore Immagini")
-        self.geometry("980x760")
-        self.minsize(740, 560)
+        self.title(f"Multimedia Master  —  Convertitore Immagini  v{__version__}")
+        # min height 540: drop zone + bottom bar + preview strip are fixed,
+        # below that the file list would collapse to nothing.
+        fit_window(self, 980, 760, 720, 540)
 
-        self._converter  = ImageConverter()
-        self._converting = False
+        self._converter       = ImageConverter()
+        self._cleaner         = MetadataCleaner()
+        self._converting      = False
+        self._cancel_event    = threading.Event()
+
+        # Output-size estimate state. A monotonic generation counter — bumped
+        # only on the main thread — invalidates in-flight estimate threads, so a
+        # slow estimate for stale settings can never overwrite a newer result.
+        self._estimate_after_id: str | None = None
+        self._estimate_gen      = 0
 
         self._init_dnd()
         self._build_ui()
@@ -40,8 +57,9 @@ class MainWindow(ctk.CTk):
             self.tk.call("tkdnd::drop_target", "register", self._w, DND_FILES)
             self.bind("<<Drop>>", self._on_window_drop)
             self._dnd_available = True
-        except Exception:
-            pass   # app works fine without drag & drop
+        except Exception as exc:
+            import sys
+            print(f"[INFO] Drag&drop non disponibile: {exc}", file=sys.stderr)
 
     def _on_window_drop(self, event) -> None:
         """Forward window-level drops to the file panel."""
@@ -59,16 +77,23 @@ class MainWindow(ctk.CTk):
         self._file_panel = FileListPanel(
             self,
             on_convert=self._start_conversion,
+            on_clean=self._start_cleaning,
+            on_cancel=self._cancel,
             on_select=self._on_row_selected,
+            on_auto_convert=self._start_conversion,
+            on_files_change=self._schedule_estimate,
         )
         self._file_panel.grid(
             row=0, column=0, sticky="nsew", padx=(12, 6), pady=(12, 6))
 
-        self._sidebar = SettingsSidebar(self)
+        self._sidebar = SettingsSidebar(
+            self, on_settings_change=self._schedule_estimate)
         self._sidebar.grid(
             row=0, column=1, sticky="nsew", padx=(6, 12), pady=(12, 6))
 
-        self._preview = PreviewPanel(self)
+        # Shorter preview strip on small screens so the file list keeps room.
+        preview_h = 210 if self.winfo_screenheight() >= 860 else 160
+        self._preview = PreviewPanel(self, height=preview_h)
         self._preview.grid(
             row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
 
@@ -83,24 +108,141 @@ class MainWindow(ctk.CTk):
         else:
             self._preview.show_source(row.file_path)
 
-    # ── Conversion orchestration ───────────────────────────────────────────────
+    # ── Shared batch helpers ───────────────────────────────────────────────────
 
-    def _start_conversion(self) -> None:
+    def _begin_batch(self) -> list[FileRow] | None:
+        """Common pre-flight for convert/clean. Returns rows or None."""
         if self._converting:
-            return
+            return None
         rows = self._file_panel.rows
         if not rows:
             messagebox.showwarning(
                 "Nessun file",
-                "Aggiungi almeno un'immagine prima di convertire.",
+                "Aggiungi almeno un'immagine prima di procedere.",
             )
-            return
-
-        config = self._sidebar.get_config()
+            return None
         self._converting = True
+        self._cancel_event.clear()
+        # Invalidate any pending/running estimate — it would race with the batch.
+        if self._estimate_after_id:
+            self.after_cancel(self._estimate_after_id)
+            self._estimate_after_id = None
+        self._estimate_gen += 1
+        self._sidebar.set_estimate("")
         self._file_panel.set_converting(True)
         self._file_panel.set_progress(0)
         self._file_panel.set_progress_color("#1f6aa5")
+        return rows
+
+    def _cancel(self) -> None:
+        self._cancel_event.set()
+        self._file_panel.set_status("Annullamento dopo il file corrente…")
+
+    # ── Output size estimation ─────────────────────────────────────────────────
+
+    def _schedule_estimate(self) -> None:
+        """Called when settings or file list change. Debounced 800 ms."""
+        if self._estimate_after_id:
+            self.after_cancel(self._estimate_after_id)
+            self._estimate_after_id = None
+        self._estimate_gen += 1          # invalidate any pending/running estimate
+        self._sidebar.set_estimate("")
+        if not self._file_panel.rows or self._converting:
+            return
+        self._estimate_after_id = self.after(800, self._start_estimate)
+
+    def _start_estimate(self) -> None:
+        self._estimate_after_id = None
+        rows = self._file_panel.rows
+        if not rows or self._converting:
+            return
+        gen        = self._estimate_gen
+        self._sidebar.set_estimate("Calcolo stima dimensioni…")
+        config     = self._sidebar.get_config()
+        first_path = rows[0].file_path
+        all_sizes  = [r.file_path.stat().st_size
+                      for r in rows if r.file_path.exists()]
+        threading.Thread(
+            target=self._run_estimate,
+            args=(gen, first_path, config, all_sizes),
+            daemon=True,
+        ).start()
+
+    def _run_estimate(self, gen: int, src: Path,
+                      config: ConversionConfig,
+                      all_sizes: list[int]) -> None:
+        tmpdir = Path(tempfile.mkdtemp(prefix="mm_estimate_"))
+        try:
+            if gen != self._estimate_gen:
+                return
+            est_cfg = ConversionConfig(
+                format=config.format, quality=config.quality,
+                target_w=config.target_w, target_h=config.target_h,
+                strip_meta=config.strip_meta, output_dir=tmpdir,
+            )
+            result = self._converter.convert(src, est_cfg)
+            if gen != self._estimate_gen:
+                return
+            if not result.success or not result.output.exists():
+                self.after(0, self._apply_estimate, gen, "")
+                return
+
+            orig_size = src.stat().st_size
+            out_size  = result.output.stat().st_size
+            ratio     = out_size / orig_size if orig_size > 0 else 1.0
+            total_orig = sum(all_sizes)
+            est_out    = int(total_orig * ratio)
+
+            def _fmt(b: int) -> str:
+                if b < 1_048_576:
+                    return f"{b / 1024:.0f} KB"
+                return f"{b / 1_048_576:.1f} MB"
+
+            sign   = "-" if ratio <= 1 else "+"
+            change = abs(1 - ratio) * 100
+            text   = (f"Stima: {_fmt(total_orig)} → {_fmt(est_out)}"
+                      f"  ({sign}{change:.0f}%  {config.format}"
+                      f" q{config.quality})")
+            self.after(0, self._apply_estimate, gen, text)
+        except Exception:
+            self.after(0, self._apply_estimate, gen, "")
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    def _apply_estimate(self, gen: int, text: str) -> None:
+        """Apply an estimate result on the main thread, ignoring stale ones."""
+        if gen == self._estimate_gen:
+            self._sidebar.set_estimate(text)
+
+    # ── Conversion orchestration ───────────────────────────────────────────────
+
+    _ANIMATED_EXTS    = frozenset({".gif", ".webp"})
+    _ANIMATED_FMT_OUT = frozenset({"GIF", "WebP"})
+
+    def _start_conversion(self) -> None:
+        rows = self._begin_batch()
+        if rows is None:
+            return
+        config = self._sidebar.get_config()   # read tk vars on main thread
+
+        # Warn if any animated source is being converted to a static format.
+        if config.format not in self._ANIMATED_FMT_OUT:
+            animated = [r.file_path for r in rows
+                        if r.file_path.suffix.lower() in self._ANIMATED_EXTS]
+            if animated:
+                names = "\n".join(f"  · {p.name}" for p in animated[:5])
+                if len(animated) > 5:
+                    names += f"\n  … e altri {len(animated) - 5}"
+                if not messagebox.askyesno(
+                    "File animati rilevati",
+                    f"{len(animated)} file potrebbero essere animati:\n{names}\n\n"
+                    f"Convertendo in {config.format} si salverà solo il "
+                    f"primo fotogramma.\n\nContinuare?",
+                    icon="warning",
+                ):
+                    self._converting = False
+                    self._file_panel.set_converting(False)
+                    return
 
         threading.Thread(
             target=self._run_conversion,
@@ -109,42 +251,124 @@ class MainWindow(ctk.CTk):
         ).start()
 
     def _run_conversion(self, rows, config) -> None:
-        total = len(rows)
-        ok    = 0
+        import sys
+        total     = len(rows)
+        ok        = 0
+        cancelled = False
 
         for i, row in enumerate(rows):
-            row.set_status("⏳", "#aaaaaa")
+            if self._cancel_event.is_set():
+                cancelled = True
+                break
+            # ALL widget updates go through after() — tkinter is not
+            # thread-safe and direct calls from here crash on Windows.
+            self.after(0, row.set_status, "⏳", "#aaaaaa")
+            self.after(0, self._file_panel.set_status,
+                       f"({i + 1}/{total})  {row.file_path.name}")
+
             result = self._converter.convert(row.file_path, config)
-            row.apply_result(result)
+
+            self.after(0, row.apply_result, result)
+            if result.success:
+                ok += 1
+                self.after(0, self._refresh_preview_if_selected, row)
+            else:
+                print(f"[ERRORE] {row.file_path.name}: {result.error}",
+                      file=sys.stderr)
+            self.after(0, self._file_panel.set_progress, (i + 1) / total)
+
+        self.after(0, self._on_batch_done, ok, total,
+                   "convertite", cancelled)
+
+    # ── Metadata cleaning orchestration ────────────────────────────────────────
+
+    def _start_cleaning(self) -> None:
+        rows = self._begin_batch()
+        if rows is None:
+            return
+        out_dir = self._sidebar.get_config().output_dir   # main thread
+        threading.Thread(
+            target=self._run_cleaning,
+            args=(rows, out_dir),
+            daemon=True,
+        ).start()
+
+    def _run_cleaning(self, rows, out_dir) -> None:
+        import sys
+        total     = len(rows)
+        ok        = 0
+        cancelled = False
+        removed_counts: dict[str, int] = {}
+
+        for i, row in enumerate(rows):
+            if self._cancel_event.is_set():
+                cancelled = True
+                break
+            self.after(0, row.set_status, "⏳", "#aaaaaa")
+            self.after(0, self._file_panel.set_status,
+                       f"Pulizia ({i + 1}/{total})  {row.file_path.name}")
+
+            src    = row.file_path
+            target = (out_dir or src.parent)
+            output = self._unique_clean_path(target, src)
+            result = self._cleaner.clean(src, output)
 
             if result.success:
                 ok += 1
-                # If this row is currently selected, refresh the preview
-                self.after(0, self._refresh_preview_if_selected, row)
+                for label in result.removed:
+                    removed_counts[label] = removed_counts.get(label, 0) + 1
+                tag = "🛡 pulita" if result.removed else "🛡 già pulita"
+                self.after(0, row.set_status, tag, "#4caf50")
             else:
-                print(f"[ERRORE] {row.file_path.name}: {result.error}")
-
+                print(f"[ERRORE] {src.name}: {result.error}", file=sys.stderr)
+                self.after(0, row.set_status, "✗ errore", "#f44336")
             self.after(0, self._file_panel.set_progress, (i + 1) / total)
 
-        self.after(0, self._on_conversion_done, ok, total)
+        summary = ""
+        if removed_counts:
+            parts = [f"{label} ({n})" for label, n in
+                     sorted(removed_counts.items(), key=lambda kv: -kv[1])]
+            summary = "  ·  rimossi: " + ", ".join(parts)
+        self.after(0, self._on_batch_done, ok, total,
+                   "pulite" + summary, cancelled)
+
+    @staticmethod
+    def _unique_clean_path(directory, src):
+        path = directory / f"{src.stem}_clean{src.suffix}"
+        counter = 1
+        while path.exists():
+            path = directory / f"{src.stem}_clean_{counter}{src.suffix}"
+            counter += 1
+        return path
+
+    # ── Batch completion ───────────────────────────────────────────────────────
 
     def _refresh_preview_if_selected(self, row: FileRow) -> None:
         if row.result:
             self._preview.show_result(row.result)
 
-    def _on_conversion_done(self, ok: int, total: int) -> None:
+    def _on_batch_done(self, ok: int, total: int,
+                       verb: str, cancelled: bool) -> None:
         self._converting = False
         self._file_panel.set_converting(False)
+        # Re-run estimate so size info reflects converted files in queue.
+        self._schedule_estimate()
 
-        if ok == total and total > 0:
+        if cancelled:
+            color = "#ff9800"
+            msg   = f"⏹ Annullato  ·  {ok} {verb} prima dell'interruzione"
+        elif ok == total and total > 0:
             color = "#4caf50"
-            msg   = f"✓ {ok}/{total} convertite con successo"
+            msg   = f"✓ {ok}/{total} {verb}"
+            # Only notify on full, unattended batches — a single file is instant.
+            if total >= 3:
+                notify("Convertitore Immagini", f"{ok} immagini {verb}")
         elif ok > 0:
             color = "#ff9800"
-            msg   = f"✓ {ok}/{total} convertite  ·  {total - ok} con errori"
+            msg   = f"✓ {ok}/{total} {verb}  ·  {total - ok} con errori"
         else:
             color = "#f44336"
-            msg   = "Nessun file convertito — controlla gli errori."
+            msg   = "Nessun file elaborato — controlla gli errori."
 
         self._file_panel.set_progress_color(color)
         self._file_panel.set_status(msg)

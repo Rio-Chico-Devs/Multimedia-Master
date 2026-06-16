@@ -18,7 +18,7 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-from common.ui.widgets import SectionLabel, StatusBar
+from common.ui.widgets import SectionLabel, StatusBar, adaptive_wraplength
 from core.audio_engine import AudioEngine, AudioInfo, safe_tempfile, VOICE_EFFECTS
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS, AUDIO_FORMATS
@@ -459,6 +459,7 @@ class EditTab(ctk.CTkFrame):
             text_color="#888", font=ctk.CTkFont(size=10),
             wraplength=520, justify="left", anchor="w")
         self._effect_desc_lbl.pack(fill="x", pady=(8, 0))
+        adaptive_wraplength(self._effect_desc_lbl)
 
     def _on_effect_change(self) -> None:
         key = self._voice_effect_var.get()
@@ -982,6 +983,17 @@ class EditTab(ctk.CTkFrame):
         suffix  = self._suffix_entry.get().strip()   # empty = same name
         out_dir = self._out_dir if self._out_dir else src.parent
         output  = out_dir / (src.stem + suffix + ext)
+
+        # Overwrite guard: warn before clobbering an existing file
+        # (must be checked on the main thread so the dialog shows correctly).
+        if output.exists() and output.resolve() != src.resolve():
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                "Sovrascrivere?",
+                f"Il file esiste già:\n{output.name}\n\nSovrascrivere?",
+                icon="warning",
+            ):
+                return
 
         voice_effect = self._voice_effect_var.get()
         self._btn_apply.configure(state="disabled")

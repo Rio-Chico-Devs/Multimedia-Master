@@ -21,6 +21,7 @@ class MergeTab(ctk.CTkFrame):
         super().__init__(parent, **kw)
         self._engine   = PdfEngine()
         self._out_dir: Path | None = None
+        self._busy     = False
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -76,10 +77,11 @@ class MergeTab(ctk.CTkFrame):
         Separator(right).pack(pady=(8, 0))
 
         # Actions
-        ctk.CTkButton(right, text="Unisci PDF",
-                      height=38,
-                      font=ctk.CTkFont(size=13, weight="bold"),
-                      command=self._run).pack(fill="x", padx=12, pady=(12, 4))
+        self._merge_btn = ctk.CTkButton(
+            right, text="Unisci PDF", height=38,
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._run)
+        self._merge_btn.pack(fill="x", padx=12, pady=(12, 4))
         ctk.CTkButton(right, text="Pulisci lista",
                       height=30, fg_color="#2a2a2a", hover_color="#3a3a3a",
                       command=self._pdf_list.clear).pack(
@@ -102,6 +104,8 @@ class MergeTab(ctk.CTkFrame):
     # ── Run ───────────────────────────────────────────────────────────────
 
     def _run(self):
+        if self._busy:
+            return
         pdfs = self._pdf_list.get_paths()
         if len(pdfs) < 2:
             self._status.err("Seleziona almeno 2 PDF da unire.")
@@ -113,6 +117,17 @@ class MergeTab(ctk.CTkFrame):
             name += ".pdf"
         output = out_dir / name
 
+        if output.exists():
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                "Sovrascrivere?",
+                f"Il file esiste già:\n{output.name}\n\nSovrascrivere?",
+                icon="warning",
+            ):
+                return
+
+        self._busy = True
+        self._merge_btn.configure(state="disabled")
         self._status.busy("Unione in corso…")
         self.update_idletasks()
 
@@ -127,9 +142,19 @@ class MergeTab(ctk.CTkFrame):
             result = self._engine.merge(pdfs, output)
             if result.success:
                 size = f"{result.file_size / 1024:.0f} KB"
-                self.after(0, self._status.ok,
+                self.after(0, self._done_ok,
                            f"Salvato: {output.name}  ({size})")
             else:
-                self.after(0, self._status.err, result.error)
+                self.after(0, self._done_err, result.error)
         except Exception as exc:
-            self.after(0, self._status.err, str(exc))
+            self.after(0, self._done_err, str(exc))
+
+    def _done_ok(self, msg: str) -> None:
+        self._busy = False
+        self._merge_btn.configure(state="normal")
+        self._status.ok(msg)
+
+    def _done_err(self, msg: str) -> None:
+        self._busy = False
+        self._merge_btn.configure(state="normal")
+        self._status.err(msg)
