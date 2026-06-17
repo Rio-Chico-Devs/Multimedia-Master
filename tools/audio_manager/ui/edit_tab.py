@@ -702,6 +702,13 @@ class EditTab(ctk.CTkFrame):
             self.after(0, lambda: self._stop_playback_ui(gen))
             return
 
+        if not self._engine._ffmpeg:
+            self.after(0, self._status.err,
+                       "ffmpeg mancante: pip install imageio-ffmpeg")
+            self.after(0, lambda: self._stop_playback_ui(gen))
+            return
+
+        from common.proc import NO_WINDOW
         try:
             logger.log("PLAY_WORKER start", str(path))
             tmp = safe_tempfile(suffix=".wav")
@@ -710,6 +717,7 @@ class EditTab(ctk.CTkFrame):
                  "-acodec", "pcm_s16le", "-ar", "44100", str(tmp)],
                 stdout=sp.DEVNULL, stderr=sp.PIPE,
                 encoding="utf-8", errors="replace",
+                **NO_WINDOW,
             )
             logger.log("PLAY_WORKER ffmpeg done", f"rc={proc.returncode}")
             if proc.returncode != 0 or tmp.stat().st_size == 0:
@@ -842,6 +850,13 @@ class EditTab(ctk.CTkFrame):
             self.after(0, lambda: self._stop_preview_ui(gen))
             return
 
+        if not self._engine._ffmpeg:
+            self.after(0, lambda: self._preview_status_lbl.configure(
+                text="ffmpeg mancante: pip install imageio-ffmpeg",
+                text_color="#f44336"))
+            self.after(0, lambda: self._stop_preview_ui(gen))
+            return
+
         tmp: Path | None = None
         try:
             cur_s  = params["cur_ms"] / 1000.0
@@ -876,10 +891,11 @@ class EditTab(ctk.CTkFrame):
                 cmd += ["-af", ",".join(filters)]
             cmd += ["-ar", "44100", "-acodec", "pcm_s16le", str(tmp)]
 
+            from common.proc import NO_WINDOW
             logger.log("PREVIEW ffmpeg start",
                        f"filters={filters} cur={cur_s:.1f}s")
             proc = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE,
-                          encoding="utf-8", errors="replace")
+                          encoding="utf-8", errors="replace", **NO_WINDOW)
             logger.log("PREVIEW ffmpeg done", f"rc={proc.returncode}")
 
             if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:

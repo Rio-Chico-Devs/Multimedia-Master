@@ -81,3 +81,34 @@ def install(log_path: Path) -> None:
 def log(header: str, text: str = "") -> None:
     """Manual checkpoint logging for debugging."""
     _write(header, text)
+
+
+def run_gui(factory, tool_label: str) -> None:
+    """
+    Build and run a CTk app, turning any fatal startup/mainloop crash into a
+    logged entry + a visible error dialog instead of a window that silently
+    vanishes. `factory` is a zero-arg callable returning the root window.
+
+    Re-raises after reporting, so the process still exits non-zero (the
+    launcher uses that to flag the failure too).
+    """
+    try:
+        app = factory()
+        app.mainloop()
+    except Exception:
+        tb = traceback.format_exc()
+        _write(f"FATAL — {tool_label} crashed", tb)
+        try:
+            from tkinter import Tk, messagebox
+            # The crashing app's root may be unusable; use a throwaway root.
+            _root = Tk()
+            _root.withdraw()
+            messagebox.showerror(
+                f"{tool_label} — errore irreversibile",
+                "Si è verificato un errore e lo strumento deve chiudersi.\n\n"
+                f"Dettagli salvati in:\n{_log_path}",
+            )
+            _root.destroy()
+        except Exception:
+            pass
+        raise

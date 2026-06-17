@@ -40,8 +40,11 @@ def _deliver(title: str, message: str) -> None:
 
 
 def _run(cmd: list[str]) -> None:
+    # NO_WINDOW stops the Windows PowerShell toast backend from flashing a
+    # console window every time a batch finishes.
+    from common.proc import NO_WINDOW
     subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                   timeout=10)
+                   timeout=10, **NO_WINDOW)
 
 
 def _linux(title: str, message: str) -> None:

@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Crash logging FIRST — on Windows the tool has no console, so without
 # this every exception (incl. C-extension crashes) is silently lost.
-from common.crashlog import install as _install_crashlog
+from common.crashlog import install as _install_crashlog, run_gui as _run_gui
 from common.paths import crash_log_path
 _install_crashlog(crash_log_path("image_converter"))
 
@@ -19,5 +19,4 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 if __name__ == "__main__":
-    app = MainWindow()
-    app.mainloop()
+    _run_gui(MainWindow, "Convertitore Immagini")

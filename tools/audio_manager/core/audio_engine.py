@@ -41,10 +41,7 @@ def safe_tempfile(suffix: str = "") -> Path:
 # ── No-console-flash subprocess kwargs (Windows only) ────────────────────────
 # ffmpeg.exe is a console app: even with the parent GUI built --windowed, it
 # pops its own console window for every call unless explicitly suppressed.
-_NO_WINDOW_KW: dict = (
-    {"creationflags": subprocess.CREATE_NO_WINDOW}
-    if sys.platform == "win32" else {}
-)
+from common.proc import NO_WINDOW as _NO_WINDOW_KW
 
 # ── Creative voice-effect filter chains (all via ffmpeg) ─────────────────────
 # Each entry: key → (human description, ffmpeg -af filter chain)
