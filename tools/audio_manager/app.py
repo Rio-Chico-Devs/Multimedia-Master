@@ -10,7 +10,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent)) # shared (common/)
 # On Windows the tool runs as a subprocess with no visible console, so without
 # this every exception (incl. C-extension crashes) is silently lost.
 from common.crashlog import install as _install_crashlog, log as _log
-_LOG = Path(__file__).parent / "crash.log"
+from common.paths import crash_log_path
+_LOG = crash_log_path("audio_manager")
 _install_crashlog(_LOG)
 
 # ── Wire up audio manager's internal debug logger ─────────────────────────────

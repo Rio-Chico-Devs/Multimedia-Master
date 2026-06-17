@@ -38,6 +38,14 @@ def safe_tempfile(suffix: str = "") -> Path:
     os.close(fd)
     return Path(name)
 
+# ── No-console-flash subprocess kwargs (Windows only) ────────────────────────
+# ffmpeg.exe is a console app: even with the parent GUI built --windowed, it
+# pops its own console window for every call unless explicitly suppressed.
+_NO_WINDOW_KW: dict = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW}
+    if sys.platform == "win32" else {}
+)
+
 # ── Creative voice-effect filter chains (all via ffmpeg) ─────────────────────
 # Each entry: key → (human description, ffmpeg -af filter chain)
 # Pitch shifts use asetrate+aresample+atempo so duration is preserved.
@@ -316,6 +324,7 @@ class AudioEngine:
             stderr=pipe,
             encoding="utf-8",
             errors="replace",
+            **_NO_WINDOW_KW,
         )
         stream = proc.stdout if merge_stderr else proc.stderr
         buf: list[str] = []
@@ -377,6 +386,7 @@ class AudioEngine:
                     stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
                     encoding="utf-8", errors="replace",
                     timeout=15,
+                    **_NO_WINDOW_KW,
                 )
                 for line in result.stderr.splitlines():
                     if "Duration:" in line and duration_s == 0.0:
@@ -702,6 +712,7 @@ class AudioEngine:
                 stderr=subprocess.PIPE,
                 encoding="utf-8",
                 errors="replace",
+                **_NO_WINDOW_KW,
             )
             if proc.returncode != 0:
                 err = proc.stderr.strip()[-400:] if proc.stderr else "Errore sconosciuto"
@@ -991,6 +1002,7 @@ class AudioEngine:
                     [self._ffmpeg, "-y", "-i", str(path), str(tmp)],
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                     encoding="utf-8", errors="replace",
+                    **_NO_WINDOW_KW,
                 )
                 if proc.returncode != 0 or tmp.stat().st_size == 0:
                     return [0.0] * num_samples, [0.0] * num_samples
@@ -1888,6 +1900,7 @@ class AudioEngine:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     encoding="utf-8", errors="replace",
+                    **_NO_WINDOW_KW,
                 )
                 if res.returncode != 0:
                     return AudioResult(
@@ -1986,6 +1999,7 @@ class AudioEngine:
                     stdout=subprocess.DEVNULL,
                     encoding="utf-8", errors="replace",
                     timeout=60,
+                    **_NO_WINDOW_KW,
                 )
                 if res.returncode == 0:
                     details.append("Decodifica ffmpeg: nessun errore")

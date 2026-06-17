@@ -8,6 +8,9 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "tools"))
 from common.version import __version__
 from common.ui.geometry import fit_window
+from common.paths import crash_log_path
+
+_TOOLS = ("image_converter", "pdf_manager", "audio_manager")
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -128,12 +131,17 @@ class Launcher(ctk.CTk):
     # ── Launch ─────────────────────────────────────────────────────────────────
 
     def _launch(self, tool_name: str) -> None:
-        script = ROOT / "tools" / tool_name / "app.py"
-        tool_dir = script.parent
+        # Frozen build: sys.executable IS the bundled exe, so re-invoke it
+        # with --tool — the bootloader re-runs this same script (see the
+        # entry point below), which dispatches to the requested tool.
+        # Dev mode: invoke the system Python on this exact file instead.
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--tool", tool_name]
+        else:
+            cmd = [sys.executable, str(Path(__file__).resolve()), "--tool", tool_name]
         try:
             proc = subprocess.Popen(
-                [sys.executable, str(script)],
-                cwd=str(tool_dir),
+                cmd,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
@@ -152,7 +160,7 @@ class Launcher(ctk.CTk):
         rc = proc.poll()
         if rc is not None and rc != 0:
             from tkinter import messagebox
-            log = ROOT / "tools" / tool_name / "crash.log"
+            log = crash_log_path(tool_name)
             messagebox.showerror(
                 "Strumento terminato",
                 f"{tool_name} si è chiuso subito (codice {rc}).\n\n"
@@ -176,6 +184,23 @@ class Launcher(ctk.CTk):
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────
+#
+# This file is the single PyInstaller entry point for the whole app. The
+# launcher window spawns each tool as a SEPARATE PROCESS by re-invoking this
+# same exe with --tool <name> (see _launch above) — runpy then executes that
+# tool's app.py exactly as if it had been run directly, preserving the
+# process isolation the app relies on (one tool crashing never takes down
+# the launcher or any other tool).
 
 if __name__ == "__main__":
-    Launcher().mainloop()
+    import argparse
+    _parser = argparse.ArgumentParser()
+    _parser.add_argument("--tool", choices=_TOOLS)
+    _args = _parser.parse_args()
+
+    if _args.tool:
+        import runpy
+        runpy.run_path(
+            str(ROOT / "tools" / _args.tool / "app.py"), run_name="__main__")
+    else:
+        Launcher().mainloop()

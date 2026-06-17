@@ -3,3 +3,8 @@ __pycache__/
 *.pyo
 *.pyd
 
+# PyInstaller build output
+/build/
+/dist/
+*.spec.bak
+
