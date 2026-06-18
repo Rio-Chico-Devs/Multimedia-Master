@@ -23,6 +23,11 @@ pdfplumber>=0.10.0,<1
 # ── OCR — searchable PDF (optional, also needs Tesseract binary installed) ────
 # pytesseract>=0.3.10
 
+# ── PDF translation — offline neural MT (optional) ────────────────────────────
+# Language packages are downloaded once from the app's "Gestisci lingue"
+# dialog (needs internet that one time); translation itself never goes online.
+# argostranslate>=1.9.0,<2
+
 # ── Audio Manager ─────────────────────────────────────────────────────────────
 pydub>=0.25.1,<1           # audio manipulation
 imageio-ffmpeg>=0.4.9,<1   # ffmpeg bundled — nessuna installazione manuale necessaria

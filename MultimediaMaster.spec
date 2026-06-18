@@ -61,6 +61,9 @@ _THIRD_PARTY = [
     "scipy",
     "mutagen",
     "sounddevice",
+    "argostranslate",
+    "ctranslate2",
+    "sentencepiece",
 ]
 for _pkg in _THIRD_PARTY:
     try:

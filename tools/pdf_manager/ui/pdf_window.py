@@ -1,12 +1,13 @@
 """
 PDF Manager main window.
-Six tabs inside a CTkTabview:
+Seven tabs inside a CTkTabview:
   1. Modifica    — visual editor (snip, drag, insert space)
   2. Converti    — images → PDF (with optional OCR)
-  3. Unisci      — merge multiple PDFs
-  4. Dividi      — split by ranges or every N pages
-  5. Proteggi    — encrypt / decrypt
-  6. Analizza    — text, metadata, form fields, summary
+  3. Traduci     — in-place translation, same layout
+  4. Unisci      — merge multiple PDFs
+  5. Dividi      — split by ranges or every N pages
+  6. Proteggi    — encrypt / decrypt
+  7. Analizza    — text, metadata, form fields, summary
 """
 from __future__ import annotations
 
@@ -18,12 +19,13 @@ from common.ui.geometry import fit_window
 from common.ui.icon import apply_icon
 from common.ui.about import add_about_button
 
-from .edit_tab    import EditTab
-from .convert_tab import ConvertTab
-from .merge_tab   import MergeTab
-from .split_tab   import SplitTab
-from .protect_tab import ProtectTab
-from .analyze_tab import AnalyzeTab
+from .edit_tab      import EditTab
+from .convert_tab   import ConvertTab
+from .translate_tab import TranslateTab
+from .merge_tab     import MergeTab
+from .split_tab     import SplitTab
+from .protect_tab   import ProtectTab
+from .analyze_tab   import AnalyzeTab
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".avif",
               ".tiff", ".tif", ".bmp", ".gif"}
@@ -85,7 +87,8 @@ class PdfWindow(ctk.CTk):
         tabs = ctk.CTkTabview(self, corner_radius=10)
         tabs.pack(fill="both", expand=True, padx=16, pady=(10, 16))
 
-        for name in ("Modifica", "Converti", "Unisci", "Dividi", "Proteggi", "Analizza"):
+        for name in ("Modifica", "Converti", "Traduci", "Unisci",
+                     "Dividi", "Proteggi", "Analizza"):
             tabs.add(name)
 
         # Modifica tab (visual editor) — first so it's prominent
@@ -95,6 +98,8 @@ class PdfWindow(ctk.CTk):
         convert = ConvertTab(tabs.tab("Converti"))
         convert.pack(fill="both", expand=True)
         self._img_list = convert._file_list          # ImageFileList
+
+        TranslateTab(tabs.tab("Traduci")).pack(fill="both", expand=True)
 
         merge = MergeTab(tabs.tab("Unisci"))
         merge.pack(fill="both", expand=True)

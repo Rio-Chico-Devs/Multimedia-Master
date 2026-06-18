@@ -7,7 +7,7 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 **Legenda esito:** ✅ ok · ⚠️ funziona con riserve · ❌ rotto · ⏭️ saltato (dip. opzionale assente)
 
 **Dipendenze opzionali** (i test relativi sono ⏭️ se assenti, non ❌):
-`pymupdf` (editor PDF) · `pytesseract` + Tesseract (OCR) · `demucs` + PyTorch (separazione stem) · `tkinterdnd2` (drag & drop)
+`pymupdf` (editor PDF) · `pytesseract` + Tesseract (OCR) · `demucs` + PyTorch (separazione stem) · `tkinterdnd2` (drag & drop) · `argostranslate` (traduzione PDF, + download lingue al primo uso)
 
 ---
 
@@ -86,6 +86,19 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | P15 | Proteggi (cifra) | Impostare password | PDF cifrato, richiede password all'apertura | ☐ |
 | P16 | Proteggi (decifra) | Rimuovere password da PDF cifrato | PDF apribile senza password | ☐ |
 | P17 | Analizza | Aprire un PDF | Testo, metadati, campi modulo, sintesi mostrati | ☐ |
+
+### 3c. Traduci (in-place, offline — richiede argostranslate)
+
+| ID | Test | Passi | Risultato atteso | Esito |
+|----|------|-------|------------------|:----:|
+| P18 | Dipendenza assente | Avviare senza argostranslate installato | Messaggio chiaro nella scheda, nessun crash (⏭️) | ☐ |
+| P19 | Nessuna lingua installata | Prima apertura, nessun pacchetto lingua scaricato | Messaggio "nessuna lingua installata", pulsanti traduzione disabilitati | ☐ |
+| P20 | Scarica coppia lingue | "Gestisci lingue" → Aggiorna elenco → Scarica e installa | Pacchetto scaricato, comparso tra le lingue installate | ☐ |
+| P21 | Traduci PDF testuale | Selezionare PDF con testo digitale, scegliere lingue, Traduci | PDF tradotto con stesso layout, testo sostituito, font ridotto se necessario per restare nel riquadro originale | ☐ |
+| P22 | Traduci PDF scansionato | Selezionare PDF scansionato con OCR attivo | Testo riconosciuto via OCR e sostituito nella stessa posizione (⏭️ se manca pytesseract/Tesseract) | ☐ |
+| P23 | Glossario | Aggiungere un termine con traduzione forzata, tradurre un PDF che lo contiene | Il termine appare tradotto come specificato nel glossario | ☐ |
+| P24 | Annulla traduzione | Avviare la traduzione di un PDF lungo, premere Annulla | Si ferma dopo la pagina corrente; le pagine già tradotte restano tradotte | ☐ |
+| P25 | Pagine senza testo | Tradurre un PDF con pagine puramente grafiche (no testo, OCR disattivato) | Quelle pagine restano invariate, nessun errore | ☐ |
 
 ---
 
