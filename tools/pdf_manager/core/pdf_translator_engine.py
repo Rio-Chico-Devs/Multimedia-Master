@@ -41,6 +41,7 @@ _OCR_DPI       = 200
 class PdfResult:
     output:     Path | None
     success:    bool
+    cancelled:  bool = False
     page_count: int = 0
     file_size:  int = 0
     error:      str = ""
@@ -95,16 +96,20 @@ def _digital_text_lines(page) -> list[dict]:
         if block["type"] != 0:
             continue
         for line in block["lines"]:
-            text = "".join(span["text"] for span in line["spans"]).strip()
+            spans = [s for s in line["spans"] if s["text"]]
+            text = "".join(s["text"] for s in spans).strip()
             if not text:
                 continue
-            span0 = line["spans"][0]
+            # A line can mix styles (e.g. one bold word); use the span that
+            # covers most of the line's characters as the representative
+            # font/size/color rather than always the first one.
+            dominant = max(spans, key=lambda s: len(s["text"]))
             lines.append({
                 "bbox":  line["bbox"],
                 "text":  text,
-                "size":  span0["size"],
-                "color": span0["color"],
-                "font":  span0["font"],
+                "size":  dominant["size"],
+                "color": dominant["color"],
+                "font":  dominant["font"],
             })
     return lines
 
@@ -118,9 +123,11 @@ def _ocr_lines(page, src_lang: str):
     pix  = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
     img  = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
+    # timeout: Tesseract può bloccarsi su immagini patologiche — stesso
+    # limite usato da core/pdf_engine.py per la conversione con OCR.
     data = pytesseract.image_to_data(
         img, lang=_TESS_LANG.get(src_lang, "eng"),
-        output_type=pytesseract.Output.DICT)
+        output_type=pytesseract.Output.DICT, timeout=120)
 
     groups: dict[tuple, dict] = {}
     for i, word in enumerate(data["text"]):
@@ -175,6 +182,7 @@ class PdfTranslatorEngine:
 
         ocr_ready = include_scanned and _ocr_available()
         total = doc.page_count or 1
+        pages_done = 0
 
         try:
             for i, page in enumerate(doc):
@@ -183,11 +191,22 @@ class PdfTranslatorEngine:
 
                 lines = _digital_text_lines(page)
                 if not lines and ocr_ready:
-                    lines = _ocr_lines(page, src)
+                    try:
+                        lines = _ocr_lines(page, src)
+                    except RuntimeError:
+                        # OCR timed out on this page — leave it untouched
+                        # rather than aborting the whole document.
+                        lines = []
 
                 if lines:
                     for li in lines:
-                        li["translated"] = translate_text(li["text"], src, tgt, glossary)
+                        # A single line that the MT engine chokes on must
+                        # not throw away every other page already done —
+                        # fall back to leaving that one line untranslated.
+                        try:
+                            li["translated"] = translate_text(li["text"], src, tgt, glossary)
+                        except Exception:
+                            li["translated"] = li["text"]
                     for li in lines:
                         page.add_redact_annot(fitz.Rect(li["bbox"]), fill=(1, 1, 1))
                     page.apply_redactions()
@@ -197,13 +216,22 @@ class PdfTranslatorEngine:
                             base_size=li["size"], color=_int_to_rgb(li["color"]),
                             fontname=_pick_font(li["font"]))
 
+                pages_done = i + 1
                 if progress_cb:
-                    progress_cb((i + 1) / total)
+                    progress_cb(pages_done / total)
 
+            cancelled = cancel_event is not None and cancel_event.is_set()
             doc.save(str(output_path))
             doc.close()
-            return PdfResult(output=output_path, success=True,
-                              page_count=total, file_size=output_path.stat().st_size)
+            return PdfResult(output=output_path, success=True, cancelled=cancelled,
+                              page_count=pages_done, file_size=output_path.stat().st_size)
         except Exception as exc:
+            # Best-effort: keep whatever pages were already translated
+            # instead of discarding the whole job on one fatal error.
+            try:
+                doc.save(str(output_path))
+            except Exception:
+                pass
             doc.close()
-            return PdfResult(output=output_path, success=False, error=str(exc))
+            return PdfResult(output=output_path, success=False,
+                              page_count=pages_done, error=str(exc))

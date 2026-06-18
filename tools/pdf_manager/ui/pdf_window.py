@@ -64,7 +64,16 @@ class PdfWindow(ctk.CTk):
         pdfs   = [p for p in paths if p.suffix.lower() == ".pdf" and p.is_file()]
         images = [p for p in paths if p.suffix.lower() in IMAGE_EXTS and p.is_file()]
 
-        if pdfs and hasattr(self, "_merge_list"):
+        active_tab = None
+        if hasattr(self, "_tabs"):
+            try:
+                active_tab = self._tabs.get()
+            except Exception:
+                pass
+
+        if pdfs and active_tab == "Traduci" and hasattr(self, "_translate_tab"):
+            self._translate_tab.set_file(pdfs[0])
+        elif pdfs and hasattr(self, "_merge_list"):
             self._merge_list._add_paths(pdfs)
         elif images and hasattr(self, "_img_list"):
             self._img_list._add_paths(images)
@@ -99,7 +108,10 @@ class PdfWindow(ctk.CTk):
         convert.pack(fill="both", expand=True)
         self._img_list = convert._file_list          # ImageFileList
 
-        TranslateTab(tabs.tab("Traduci")).pack(fill="both", expand=True)
+        translate = TranslateTab(tabs.tab("Traduci"))
+        translate.pack(fill="both", expand=True)
+        self._translate_tab = translate
+        self._tabs = tabs
 
         merge = MergeTab(tabs.tab("Unisci"))
         merge.pack(fill="both", expand=True)

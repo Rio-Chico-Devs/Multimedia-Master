@@ -358,6 +358,11 @@ class TranslateTab(ctk.CTkFrame):
 
     # ── File / dir ─────────────────────────────────────────────────────────
 
+    def set_file(self, path: Path) -> None:
+        """Set the PDF to translate (used for window-level drag & drop)."""
+        if hasattr(self, "_picker"):
+            self._picker.set_path(path)
+
     def _on_file_change(self, path) -> None:
         self._set_buttons_state("normal" if path else "disabled")
 
@@ -422,7 +427,10 @@ class TranslateTab(ctk.CTkFrame):
         self._btn_cancel.configure(state="disabled")
         state = "normal" if self._picker.get_path() else "disabled"
         self._btn_translate.configure(state=state)
-        if result.success:
+        if result.cancelled:
+            self._status.ok(f"Annullato — {result.page_count} pagine tradotte "
+                             f"su {result.output.name}")
+        elif result.success:
             self._status.ok(f"Tradotto: {result.output.name}")
         else:
             self._status.err(result.error or "Traduzione interrotta.")
