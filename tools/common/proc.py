@@ -39,7 +39,11 @@ def harden_subprocess_stdin() -> None:
     _real_init = subprocess.Popen.__init__
 
     def _patched_init(self, *args, **kwargs):
-        if kwargs.get("stdin") is None:
+        # Popen's signature is (args, bufsize=-1, executable=None, stdin=None, ...):
+        # if a caller ever supplies stdin positionally (5th positional slot
+        # including self, i.e. args[3] here), skip the kwarg injection —
+        # otherwise _real_init gets stdin both positionally and as a kwarg.
+        if len(args) <= 3 and kwargs.get("stdin") is None:
             kwargs["stdin"] = subprocess.DEVNULL
         _real_init(self, *args, **kwargs)
 
