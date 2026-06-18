@@ -207,4 +207,10 @@ if __name__ == "__main__":
         runpy.run_path(
             str(ROOT / "tools" / _args.tool / "app.py"), run_name="__main__")
     else:
-        Launcher().mainloop()
+        # Crash logging for the launcher itself — without this, a startup
+        # or mainloop crash here is 100% silent (no console, no log, no
+        # dialog): the window just never appears. Each tool's app.py
+        # already does this for itself; the launcher needs its own.
+        from common.crashlog import install as _install_crashlog, run_gui as _run_gui
+        _install_crashlog(crash_log_path("launcher"))
+        _run_gui(Launcher, "Multimedia Master")

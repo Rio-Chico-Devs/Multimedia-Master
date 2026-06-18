@@ -11,8 +11,8 @@ from common.ui.icon import apply_icon
 from common.ui.about import add_about_button
 from common.notify import notify
 from core.converter import ImageConverter
-from core.formats import ConversionConfig
-from core.metadata_cleaner import MetadataCleaner
+from core.formats import ConversionConfig, ConversionResult
+from core.metadata_cleaner import MetadataCleaner, CleanResult
 from ui.file_list import FileListPanel
 from ui.file_row import FileRow
 from ui.sidebar import SettingsSidebar
@@ -270,7 +270,13 @@ class MainWindow(ctk.CTk):
             self.after(0, self._file_panel.set_status,
                        f"({i + 1}/{total})  {row.file_path.name}")
 
-            result = self._converter.convert(row.file_path, config)
+            try:
+                result = self._converter.convert(row.file_path, config)
+            except Exception as exc:
+                result = ConversionResult(
+                    source=row.file_path, output=row.file_path,
+                    original_size=0, converted_size=0,
+                    success=False, error=str(exc))
 
             self.after(0, row.apply_result, result)
             if result.success:
@@ -315,7 +321,11 @@ class MainWindow(ctk.CTk):
             src    = row.file_path
             target = (out_dir or src.parent)
             output = self._unique_clean_path(target, src)
-            result = self._cleaner.clean(src, output)
+            try:
+                result = self._cleaner.clean(src, output)
+            except Exception as exc:
+                result = CleanResult(source=src, output=None,
+                                      success=False, error=str(exc))
 
             if result.success:
                 ok += 1

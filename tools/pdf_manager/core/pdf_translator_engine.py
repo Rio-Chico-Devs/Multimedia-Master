@@ -207,9 +207,22 @@ class PdfTranslatorEngine:
                             li["translated"] = translate_text(li["text"], src, tgt, glossary)
                         except Exception:
                             li["translated"] = li["text"]
+                    # apply_redactions() unconditionally drops every link
+                    # overlapping a redacted rect (pymupdf docs/wiki) — a
+                    # text line under a hyperlink is the common case (URLs,
+                    # mailto:, page jumps), so without this the translated
+                    # PDF would silently lose all its links. Capture and
+                    # recreate them across the redaction.
+                    links = page.get_links()
                     for li in lines:
                         page.add_redact_annot(fitz.Rect(li["bbox"]), fill=(1, 1, 1))
                     page.apply_redactions()
+                    for link in links:
+                        # The xref refers to the link object apply_redactions()
+                        # just destroyed — insert_link() must create a new
+                        # object, not be pointed at the dead one.
+                        link.pop("xref", None)
+                        page.insert_link(link)
                     for li in lines:
                         _insert_autoshrink(
                             page, fitz.Rect(li["bbox"]), li["translated"],

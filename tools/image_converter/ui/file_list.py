@@ -266,10 +266,14 @@ class FileListPanel(ctk.CTkFrame):
         ).start()
 
     def _scan_folder_bg(self, folder: Path) -> None:
-        paths = sorted(
-            p for p in folder.rglob("*")
-            if p.is_file() and p.suffix.lower() in INPUT_EXTS
-        )
+        try:
+            paths = sorted(
+                p for p in folder.rglob("*")
+                if p.is_file() and p.suffix.lower() in INPUT_EXTS
+            )
+        except OSError as exc:
+            self.after(0, self.set_status, f"Errore scansione cartella: {exc}")
+            return
         self.after(0, self._add_paths_sequential, paths, 0)
 
     def _add_paths_sequential(self, paths: list, idx: int) -> None:

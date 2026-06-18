@@ -30,36 +30,58 @@ def _write(header: str, text: str) -> None:
 
 
 class _TeeStream:
-    """Mirror writes to the real stream AND the crash log."""
+    """
+    Mirror writes to the real stream AND the crash log.
 
-    def __init__(self, real):
+    On Windows, a windowed (console=False) build has sys.stdout AND
+    sys.stderr set to None by the PyInstaller bootloader — any code or
+    third-party library that calls .write()/.isatty()/.fileno() on them
+    without a None-check crashes the whole process. Wrapping both streams
+    here (not just stderr) means that crash can't happen, and isatty()/
+    fileno() answer the way a library would expect from "no real terminal"
+    instead of raising AttributeError.
+    """
+
+    def __init__(self, real, label: str):
         self._real = real
+        self._label = label
 
     def write(self, s: str) -> None:
-        try:
-            self._real.write(s)
-            self._real.flush()
-        except Exception:
-            pass
+        if self._real is not None:
+            try:
+                self._real.write(s)
+                self._real.flush()
+            except Exception:
+                pass
         if s.strip():
-            _write("STDERR", s)
+            _write(self._label, s)
 
     def flush(self) -> None:
-        try:
-            self._real.flush()
-        except Exception:
-            pass
+        if self._real is not None:
+            try:
+                self._real.flush()
+            except Exception:
+                pass
+
+    def isatty(self) -> bool:
+        return False
 
     def fileno(self):
-        return self._real.fileno()
+        if self._real is not None:
+            try:
+                return self._real.fileno()
+            except Exception:
+                pass
+        raise OSError("no underlying stream (windowed build has none)")
 
 
 def install(log_path: Path) -> None:
-    """Wire up stderr tee + main/thread exception hooks."""
+    """Wire up stdout/stderr tee + main/thread exception hooks."""
     global _log_path
     _log_path = log_path
 
-    sys.stderr = _TeeStream(sys.stderr)
+    sys.stdout = _TeeStream(sys.stdout, "STDOUT")
+    sys.stderr = _TeeStream(sys.stderr, "STDERR")
 
     def _main_hook(exc_type, exc_value, exc_tb):
         _write("UNCAUGHT EXCEPTION (main thread)",

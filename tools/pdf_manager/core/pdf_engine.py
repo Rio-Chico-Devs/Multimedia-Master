@@ -295,18 +295,17 @@ class PdfEngine:
         and the XMP /Metadata stream so the output carries no document-level
         identifying information.  Best-effort across pypdf versions.
         """
+        # No except: pass here on purpose — both callers already wrap this
+        # in a try/except that reports failure honestly. Swallowing errors
+        # here would instead produce an output PDF that still carries the
+        # original author/dates/XMP metadata while reporting success to a
+        # user who explicitly asked for it to be stripped.
         try:
             writer.metadata = None          # pypdf ≥ 4.1 removes /Info entirely
         except Exception:
-            try:
-                writer.add_metadata({})     # fallback: empty Info dict
-            except Exception:
-                pass
-        try:
-            if "/Metadata" in writer._root_object:
-                del writer._root_object["/Metadata"]   # XMP stream
-        except Exception:
-            pass
+            writer.add_metadata({})         # fallback: empty Info dict
+        if "/Metadata" in writer._root_object:
+            del writer._root_object["/Metadata"]   # XMP stream
 
     # ── Compress ──────────────────────────────────────────────────────────────
 

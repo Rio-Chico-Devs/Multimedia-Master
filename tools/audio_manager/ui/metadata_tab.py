@@ -200,9 +200,13 @@ class MetadataTab(ctk.CTkFrame):
                          args=(self._files[idx],), daemon=True).start()
 
     def _load_thread(self, path: Path) -> None:
-        fields     = self._engine.deep_read_tags(path)
-        provenance = self._engine.compute_provenance(path, fields)
-        art_bytes  = self._engine.get_album_art(path)
+        try:
+            fields     = self._engine.deep_read_tags(path)
+            provenance = self._engine.compute_provenance(path, fields)
+            art_bytes  = self._engine.get_album_art(path)
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
+            return
         self.after(0, self._render, fields, provenance, art_bytes, path)
 
     def _remove_sel(self) -> None:
@@ -468,11 +472,14 @@ class MetadataTab(ctk.CTkFrame):
                      changes: dict, deletions: set) -> None:
         ok, errors = 0, []
         for path in paths:
-            r = self._engine.save_meta_changes(path, changes, deletions)
-            if r.success:
-                ok += 1
-            else:
-                errors.append(f"{path.name}: {r.error}")
+            try:
+                r = self._engine.save_meta_changes(path, changes, deletions)
+                if r.success:
+                    ok += 1
+                else:
+                    errors.append(f"{path.name}: {r.error}")
+            except Exception as exc:
+                errors.append(f"{path.name}: {exc}")
         msg = f"Salvati {ok}/{len(paths)} file"
         if errors:
             self.after(0, self._status.err, msg + f" — {errors[0]}")
@@ -500,11 +507,14 @@ class MetadataTab(ctk.CTkFrame):
     def _worker_wipe(self, paths: list[Path]) -> None:
         ok, errors = 0, []
         for path in paths:
-            r = self._engine.forensic_wipe(path)
-            if r.success:
-                ok += 1
-            else:
-                errors.append(f"{path.name}: {r.error}")
+            try:
+                r = self._engine.forensic_wipe(path)
+                if r.success:
+                    ok += 1
+                else:
+                    errors.append(f"{path.name}: {r.error}")
+            except Exception as exc:
+                errors.append(f"{path.name}: {exc}")
         msg = f"Wipe completato su {ok}/{len(paths)} file"
         if errors:
             self.after(0, self._status.err, msg + f" — {errors[0]}")
@@ -546,9 +556,13 @@ class MetadataTab(ctk.CTkFrame):
                          args=(path, Path(out)), daemon=True).start()
 
     def _worker_export(self, path: Path, out: Path) -> None:
-        fields     = self._engine.deep_read_tags(path)
-        provenance = self._engine.compute_provenance(path, fields)
-        r = self._engine.export_report(path, fields, provenance, out)
+        try:
+            fields     = self._engine.deep_read_tags(path)
+            provenance = self._engine.compute_provenance(path, fields)
+            r = self._engine.export_report(path, fields, provenance, out)
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
+            return
         if r.success:
             self.after(0, self._status.ok, f"Report salvato: {out.name}")
         else:
@@ -564,7 +578,12 @@ class MetadataTab(ctk.CTkFrame):
                          args=(path,), daemon=True).start()
 
     def _worker_analyze(self, path: Path) -> None:
-        report = self._engine.analyze_file(path)
+        try:
+            report = self._engine.analyze_file(path)
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
+            self.after(0, lambda: self._btn_analyze.configure(state="normal"))
+            return
         lines = [
             "✅  FILE SICURO" if report["safe"]
             else f"⚠   {len(report['issues'])} PROBLEMA/I",

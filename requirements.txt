@@ -15,7 +15,9 @@ pypdf>=4.0.0,<6           # merge, split, encrypt, form fields
 reportlab>=4.0.0,<5       # create PDF from images (no OCR path)
 
 # ── PDF visual editor — render pages as images for the Modifica tab ──────────
-pymupdf>=1.23.0,<2        # pip install pymupdf  (also known as fitz)
+pymupdf>=1.24.13,<2       # pip install pymupdf  (also known as fitz)
+                          # >=1.24.13: 1.24.12 raises AssertionError on import
+                          # under a frozen --windowed build (PyMuPDF #3981)
 
 # ── PDF text extraction (optional, better layout than pypdf) ──────────────────
 pdfplumber>=0.10.0,<1

@@ -12,6 +12,11 @@ from common.crashlog import install as _install_crashlog, run_gui as _run_gui
 from common.paths import crash_log_path
 _install_crashlog(crash_log_path("pdf_manager"))
 
+# Frozen-build hardening: pytesseract spawns tesseract.exe without setting
+# stdin, which hangs forever (not crashes) in a windowed build with no console.
+from common.proc import harden_subprocess_stdin as _harden_stdin
+_harden_stdin()
+
 import customtkinter as ctk
 from ui.pdf_window import PdfWindow
 

@@ -13,6 +13,11 @@ from common.paths import crash_log_path
 _LOG = crash_log_path("audio_manager")
 _install_crashlog(_LOG)
 
+# Frozen-build hardening: pydub spawns ffmpeg without setting stdin, which
+# hangs forever (not crashes) in a windowed build with no console.
+from common.proc import harden_subprocess_stdin as _harden_stdin
+_harden_stdin()
+
 # ── Wire up audio manager's internal debug logger ─────────────────────────────
 # edit_tab and other modules import `from core import logger` for checkpoints.
 from core import logger as _logger

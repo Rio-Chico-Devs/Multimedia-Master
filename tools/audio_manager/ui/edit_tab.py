@@ -559,9 +559,13 @@ class EditTab(ctk.CTkFrame):
         ).start()
 
     def _load_waveform(self, path: Path) -> None:
-        info = self._engine.probe(path)
+        try:
+            info = self._engine.probe(path)
+            pos, neg = self._engine.get_waveform_peaks(path, num_samples=900)
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
+            return
         self._info = info
-        pos, neg  = self._engine.get_waveform_peaks(path, num_samples=900)
         dur_ms    = int(info.duration_s * 1000)
 
         def _apply():
@@ -973,7 +977,11 @@ class EditTab(ctk.CTkFrame):
         ).start()
 
     def _split_worker(self, src: Path, points: list[int]) -> None:
-        results = self._engine.split(src, src.parent, points)
+        try:
+            results = self._engine.split(src, src.parent, points)
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
+            return
         ok  = sum(1 for r in results if r.success)
         tot = len(results)
         if ok == tot:
@@ -1021,8 +1029,8 @@ class EditTab(ctk.CTkFrame):
     def _worker(self, src: Path, output: Path, fmt: str,
                 voice_effect: str = "none") -> None:
         import shutil
-        tmp_a   = safe_tempfile(suffix=src.suffix)
-        tmp_b   = safe_tempfile(suffix=src.suffix)
+        tmp_a   = None
+        tmp_b   = None
         current = src
         use_a   = True
 
@@ -1038,6 +1046,9 @@ class EditTab(ctk.CTkFrame):
             return True
 
         try:
+            tmp_a = safe_tempfile(suffix=src.suffix)
+            tmp_b = safe_tempfile(suffix=src.suffix)
+
             s_ms, e_ms = self._wf.get_trim_range()
             action     = self._sel_action_var.get()
 
@@ -1095,6 +1106,9 @@ class EditTab(ctk.CTkFrame):
                 shutil.copy2(str(current), str(output))
 
             self.after(0, self._status.ok, f"Salvato: {output.name}")
+
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
 
         finally:
             for t in (tmp_a, tmp_b):

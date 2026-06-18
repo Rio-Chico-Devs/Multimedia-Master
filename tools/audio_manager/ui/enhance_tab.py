@@ -18,7 +18,7 @@ import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, Separator, StatusBar
 from common.depmsg import pip_hint
-from core.audio_engine import AudioEngine
+from core.audio_engine import AudioEngine, AudioResult
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS
 
@@ -357,17 +357,20 @@ class EnhanceTab(ctk.CTkFrame):
 
             self.after(0, lambda l=lbl: l.configure(
                 text="⏳", text_color="#aaa"))
-            result = self._engine.enhance(
-                src=path,
-                output=output,
-                denoise=params["denoise"],
-                normalize=params["normalize"],
-                highpass=params["highpass"],
-                eq_presence=params["eq_presence"],
-                compress=params["compress"],
-                prop_decrease=params["prop_decrease"],
-                progress_cb=lambda p, _i=i: _prog(p, _i),
-            )
+            try:
+                result = self._engine.enhance(
+                    src=path,
+                    output=output,
+                    denoise=params["denoise"],
+                    normalize=params["normalize"],
+                    highpass=params["highpass"],
+                    eq_presence=params["eq_presence"],
+                    compress=params["compress"],
+                    prop_decrease=params["prop_decrease"],
+                    progress_cb=lambda p, _i=i: _prog(p, _i),
+                )
+            except Exception as exc:
+                result = AudioResult(output=None, success=False, error=str(exc))
             if result.success:
                 ok += 1
                 self.after(0, lambda l=lbl: l.configure(
