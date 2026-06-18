@@ -6,6 +6,7 @@ The output format and quality preset are the same as in the Convert tab.
 """
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 
@@ -36,15 +37,18 @@ class ExtractTab(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         if not self._ffmpeg_ok:
+            if getattr(sys, "frozen", False):
+                msg = "⚠  ffmpeg non trovato in questa build. Contatta l'assistenza."
+            else:
+                msg = ("⚠  ffmpeg non trovato.\n\n"
+                       "Soluzione più semplice (nessuna installazione di sistema):\n\n"
+                       "    pip install imageio-ffmpeg\n\n"
+                       "Poi riavvia Multimedia Master.\n\n"
+                       "In alternativa puoi installare ffmpeg nel sistema:\n"
+                       "  • macOS:   brew install ffmpeg\n"
+                       "  • Linux:   sudo apt install ffmpeg")
             ctk.CTkLabel(
-                self,
-                text="⚠  ffmpeg non trovato.\n\n"
-                     "Soluzione più semplice (nessuna installazione di sistema):\n\n"
-                     "    pip install imageio-ffmpeg\n\n"
-                     "Poi riavvia Multimedia Master.\n\n"
-                     "In alternativa puoi installare ffmpeg nel sistema:\n"
-                     "  • macOS:   brew install ffmpeg\n"
-                     "  • Linux:   sudo apt install ffmpeg",
+                self, text=msg,
                 font=ctk.CTkFont(size=12),
                 text_color="#f44336",
                 justify="left",

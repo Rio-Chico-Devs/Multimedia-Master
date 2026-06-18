@@ -7,6 +7,8 @@ from tkinter import messagebox
 
 from common.version import __version__
 from common.ui.geometry import fit_window
+from common.ui.icon import apply_icon
+from common.ui.about import add_about_button
 from common.notify import notify
 from core.converter import ImageConverter
 from core.formats import ConversionConfig
@@ -27,9 +29,11 @@ class MainWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(f"Multimedia Master  —  Convertitore Immagini  v{__version__}")
+        apply_icon(self)
         # min height 540: drop zone + bottom bar + preview strip are fixed,
         # below that the file list would collapse to nothing.
         fit_window(self, 980, 760, 720, 540)
+        add_about_button(self, "Convertitore Immagini")
 
         self._converter       = ImageConverter()
         self._cleaner         = MetadataCleaner()

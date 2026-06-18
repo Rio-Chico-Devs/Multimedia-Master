@@ -17,6 +17,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, Separator, StatusBar
+from common.depmsg import pip_hint
 from core.audio_engine import AudioEngine
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS
@@ -91,7 +92,7 @@ class EnhanceTab(ctk.CTkFrame):
         if not nr_ok:
             ctk.CTkLabel(
                 right,
-                text="⚠  pip install noisereduce soundfile numpy",
+                text=f"⚠  {pip_hint('noisereduce soundfile numpy')}",
                 text_color="#f44336", font=ctk.CTkFont(size=10),
                 anchor="w",
             ).pack(fill="x", padx=16, pady=(0, 6))

@@ -10,6 +10,8 @@ import importlib.util
 import shutil
 from dataclasses import dataclass
 
+from common.depmsg import pip_hint
+
 
 @dataclass
 class DepStatus:
@@ -64,10 +66,7 @@ def install_hint(status: DepStatus) -> str:
     lines = []
     m = missing_packages(status)
     if m:
-        lines.append(f"pip install {' '.join(m)}")
+        lines.append(pip_hint(" ".join(m)))
     if not status.ffmpeg:
-        lines.append(
-            "ffmpeg mancante — soluzione più semplice:  "
-            "pip install imageio-ffmpeg"
-        )
+        lines.append(f"ffmpeg mancante — {pip_hint('imageio-ffmpeg')}")
     return "\n".join(lines)

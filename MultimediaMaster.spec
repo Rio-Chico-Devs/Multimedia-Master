@@ -34,7 +34,10 @@ from PyInstaller.utils.hooks import collect_all
 
 ROOT = Path(SPECPATH)
 
-datas = [(str(ROOT / "tools"), "tools")]
+datas = [
+    (str(ROOT / "tools"), "tools"),
+    (str(ROOT / "assets"), "assets"),
+]
 binaries = []
 hiddenimports = []
 
@@ -96,6 +99,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,   # GUI app — no console window
+    icon=str(ROOT / "assets" / "icon.ico"),
 )
 
 coll = COLLECT(

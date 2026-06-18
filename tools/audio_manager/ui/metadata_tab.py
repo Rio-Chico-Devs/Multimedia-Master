@@ -20,6 +20,7 @@ Features:
 """
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 
@@ -28,6 +29,7 @@ from PIL import Image, ImageTk
 
 from common.ui.widgets import (SectionLabel, Separator, StatusBar,
                                adaptive_wraplength)
+from common.depmsg import pip_hint
 from core.audio_engine import AudioEngine
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS
@@ -70,11 +72,14 @@ class MetadataTab(ctk.CTkFrame):
         self.grid_rowconfigure(1, weight=1)
 
         if not self._deps.mutagen:
+            if getattr(sys, "frozen", False):
+                msg = "⚠  Questa funzione richiede mutagen, non incluso in questa build."
+            else:
+                msg = ("⚠  Questa funzione richiede mutagen.\n\n"
+                       f"{pip_hint('mutagen').capitalize()}.\n\n"
+                       "Poi riavvia Multimedia Master.")
             ctk.CTkLabel(
-                self,
-                text="⚠  Questa funzione richiede mutagen.\n\n"
-                     "Installa con:  pip install mutagen\n\n"
-                     "Poi riavvia Multimedia Master.",
+                self, text=msg,
                 font=ctk.CTkFont(size=12), text_color="#f44336", justify="left",
             ).grid(row=0, column=0, padx=40, pady=40, sticky="nw")
             return

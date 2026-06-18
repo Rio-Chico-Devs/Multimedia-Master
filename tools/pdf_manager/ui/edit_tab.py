@@ -28,6 +28,7 @@ import tkinter as _tk
 
 import customtkinter as ctk
 
+from common.depmsg import pip_hint
 from .editor_canvas import EditorCanvas
 from .widgets       import SectionLabel, StatusBar, adaptive_wraplength
 from core.pdf_editor_engine import PdfEditorEngine
@@ -213,7 +214,7 @@ class EditTab(ctk.CTkFrame):
                        f"Aperto: {self._pdf_path.name}  ({n} pagine)")
         except ImportError:
             self.after(0, self._status.err,
-                       "pymupdf non installato. Esegui: pip install pymupdf")
+                       f"pymupdf non disponibile — {pip_hint('pymupdf')}")
         except Exception as exc:
             self.after(0, self._status.err, str(exc))
 

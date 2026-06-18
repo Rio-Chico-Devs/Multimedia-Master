@@ -15,6 +15,8 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.geometry import fit_window
+from common.ui.icon import apply_icon
+from common.ui.about import add_about_button
 
 from .edit_tab    import EditTab
 from .convert_tab import ConvertTab
@@ -33,7 +35,9 @@ class PdfWindow(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Gestione PDF — Multimedia Master")
+        apply_icon(self)
         fit_window(self, 960, 680, 760, 520)
+        add_about_button(self, "Gestione PDF")
         self._init_dnd()
         self._build()
 

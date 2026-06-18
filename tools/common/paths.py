@@ -21,6 +21,11 @@ def exe_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def icon_path() -> Path:
+    """Path to the app icon, stable across dev mode and frozen builds."""
+    return exe_dir() / "assets" / "icon.ico"
+
+
 def crash_log_path(tool_name: str) -> Path:
     """Stable, writable crash-log location for `tool_name`."""
     if getattr(sys, "frozen", False):

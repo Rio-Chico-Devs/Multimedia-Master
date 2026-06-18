@@ -42,6 +42,7 @@ def safe_tempfile(suffix: str = "") -> Path:
 # ffmpeg.exe is a console app: even with the parent GUI built --windowed, it
 # pops its own console window for every call unless explicitly suppressed.
 from common.proc import NO_WINDOW as _NO_WINDOW_KW
+from common.depmsg import pip_hint
 
 # ── Creative voice-effect filter chains (all via ffmpeg) ─────────────────────
 # Each entry: key → (human description, ffmpeg -af filter chain)
@@ -455,7 +456,7 @@ class AudioEngine:
         """Convert/compress audio to the target format using ffmpeg directly."""
         if not self._ffmpeg:
             return AudioResult(output=output, success=False,
-                               error="ffmpeg non trovato. Esegui: pip install imageio-ffmpeg")
+                               error=f"ffmpeg non trovato — {pip_hint('imageio-ffmpeg')}")
         try:
             cmd = [self._ffmpeg, "-y", "-i", str(src)]
             if sample_rate:
@@ -667,7 +668,7 @@ class AudioEngine:
         """
         if not self._ffmpeg:
             return AudioResult(output=output, success=False,
-                               error="ffmpeg non trovato. pip install imageio-ffmpeg")
+                               error=f"ffmpeg non trovato — {pip_hint('imageio-ffmpeg')}")
 
         # Filter chain per preset
         if preset == "leggero":

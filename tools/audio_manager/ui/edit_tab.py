@@ -19,6 +19,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, StatusBar, adaptive_wraplength
+from common.depmsg import pip_hint
 from core.audio_engine import AudioEngine, AudioInfo, safe_tempfile, VOICE_EFFECTS
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS, AUDIO_FORMATS
@@ -366,7 +367,7 @@ class EditTab(ctk.CTkFrame):
         if not eq_ok:
             ctk.CTkLabel(
                 body,
-                text="⚠  Richiede: pip install soundfile scipy numpy",
+                text=f"⚠  {pip_hint('soundfile scipy numpy')}",
                 text_color="#f44336", font=ctk.CTkFont(size=10),
             ).pack(anchor="w", pady=(0, 6))
         else:
@@ -697,14 +698,13 @@ class EditTab(ctk.CTkFrame):
             import sounddevice as sd
             import numpy as np
         except ImportError:
-            self.after(0, self._status.err,
-                       "Installa sounddevice: pip install sounddevice")
+            self.after(0, self._status.err, pip_hint("sounddevice"))
             self.after(0, lambda: self._stop_playback_ui(gen))
             return
 
         if not self._engine._ffmpeg:
             self.after(0, self._status.err,
-                       "ffmpeg mancante: pip install imageio-ffmpeg")
+                       f"ffmpeg mancante — {pip_hint('imageio-ffmpeg')}")
             self.after(0, lambda: self._stop_playback_ui(gen))
             return
 
@@ -846,13 +846,13 @@ class EditTab(ctk.CTkFrame):
             import numpy as np
         except ImportError:
             self.after(0, lambda: self._preview_status_lbl.configure(
-                text="pip install sounddevice", text_color="#f44336"))
+                text=pip_hint("sounddevice"), text_color="#f44336"))
             self.after(0, lambda: self._stop_preview_ui(gen))
             return
 
         if not self._engine._ffmpeg:
             self.after(0, lambda: self._preview_status_lbl.configure(
-                text="ffmpeg mancante: pip install imageio-ffmpeg",
+                text=f"ffmpeg mancante — {pip_hint('imageio-ffmpeg')}",
                 text_color="#f44336"))
             self.after(0, lambda: self._stop_preview_ui(gen))
             return

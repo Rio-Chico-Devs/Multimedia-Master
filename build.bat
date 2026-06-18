@@ -22,4 +22,18 @@ if errorlevel 1 (
 
 echo.
 echo Build OK: dist\MultimediaMaster\MultimediaMaster.exe
-echo Copy the whole dist\MultimediaMaster folder to distribute the app.
+
+for /f %%i in ('python -c "import sys; sys.path.insert(0, 'tools'); from common.version import __version__; print(__version__)"') do set VERSION=%%i
+
+set ZIP_NAME=MultimediaMaster-%VERSION%-win64.zip
+del "dist\%ZIP_NAME%" 2>nul
+powershell -NoProfile -Command "Compress-Archive -Path 'dist\MultimediaMaster\*' -DestinationPath 'dist\%ZIP_NAME%' -Force"
+
+if errorlevel 1 (
+    echo.
+    echo ZIP step failed — distribute the dist\MultimediaMaster folder manually.
+    exit /b 1
+)
+
+echo.
+echo Distribution zip ready: dist\%ZIP_NAME%

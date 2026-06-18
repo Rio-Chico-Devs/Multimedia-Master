@@ -8,6 +8,8 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "tools"))
 from common.version import __version__
 from common.ui.geometry import fit_window
+from common.ui.icon import apply_icon
+from common.ui.about import add_about_button
 from common.paths import crash_log_path
 
 _TOOLS = ("image_converter", "pdf_manager", "audio_manager")
@@ -72,7 +74,9 @@ class Launcher(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Multimedia Master")
+        apply_icon(self)
         fit_window(self, 900, 380, 640, 320)
+        add_about_button(self)
         self._processes: list[subprocess.Popen] = []
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
