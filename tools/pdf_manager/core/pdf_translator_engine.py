@@ -65,16 +65,17 @@ def _pick_font(orig_font_name: str) -> str:
 
 
 def _insert_autoshrink(page, rect, text: str, base_size: float,
-                        color: tuple[float, float, float], fontname: str) -> None:
+                        color: tuple[float, float, float], fontname: str,
+                        rotate: int = 0) -> None:
     size = max(base_size, _MIN_FONT_SIZE)
     while size >= _MIN_FONT_SIZE:
         rc = page.insert_textbox(rect, text, fontsize=size, fontname=fontname,
-                                  color=color, align=0)
+                                  color=color, align=0, rotate=rotate)
         if rc >= 0:
             return
         size -= 0.5
     page.insert_textbox(rect, text, fontsize=_MIN_FONT_SIZE, fontname=fontname,
-                         color=color, align=0)
+                         color=color, align=0, rotate=rotate)
 
 
 def _digital_text_lines(page) -> list[dict]:
@@ -196,6 +197,20 @@ class PdfTranslatorEngine:
                             translate_errors += 1
                             if not first_error:
                                 first_error = str(exc)
+                    # Page rotation handling: get_text()/get_pixmap() report
+                    # boxes in the *displayed* (rotated) coordinate system,
+                    # but add_redact_annot()/insert_textbox() operate in the
+                    # page's *unrotated* base system. On a rotated page (e.g.
+                    # this scanned manual is /Rotate 270) the two disagree, so
+                    # without converting them the white-out misses the original
+                    # text and the translation lands rotated and out of place.
+                    # derotation_matrix is the identity on an unrotated page,
+                    # so this is a no-op for the common case.
+                    derot = page.derotation_matrix
+                    rot   = page.rotation
+                    for li in lines:
+                        li["rect"] = fitz.Rect(li["bbox"]) * derot
+
                     # apply_redactions() unconditionally drops every link
                     # overlapping a redacted rect (pymupdf docs/wiki) — a
                     # text line under a hyperlink is the common case (URLs,
@@ -204,7 +219,7 @@ class PdfTranslatorEngine:
                     # recreate them across the redaction.
                     links = page.get_links()
                     for li in lines:
-                        page.add_redact_annot(fitz.Rect(li["bbox"]), fill=(1, 1, 1))
+                        page.add_redact_annot(li["rect"], fill=(1, 1, 1))
                     page.apply_redactions()
                     for link in links:
                         # The xref refers to the link object apply_redactions()
@@ -214,9 +229,9 @@ class PdfTranslatorEngine:
                         page.insert_link(link)
                     for li in lines:
                         _insert_autoshrink(
-                            page, fitz.Rect(li["bbox"]), li["translated"],
+                            page, li["rect"], li["translated"],
                             base_size=li["size"], color=_int_to_rgb(li["color"]),
-                            fontname=_pick_font(li["font"]))
+                            fontname=_pick_font(li["font"]), rotate=rot)
 
                 pages_done = i + 1
                 if progress_cb:
