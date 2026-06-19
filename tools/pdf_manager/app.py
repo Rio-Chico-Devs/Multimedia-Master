@@ -17,6 +17,12 @@ _install_crashlog(crash_log_path("pdf_manager"))
 from common.proc import harden_subprocess_stdin as _harden_stdin
 _harden_stdin()
 
+# Point pytesseract at the bundled Tesseract copy, if the build vendored one
+# (see vendor/tesseract/README.md) — makes OCR/scanned-PDF-translation work
+# on a customer's PC with nothing extra to install. No-op otherwise.
+from common.ocr_bin import configure_tesseract as _configure_tesseract
+_configure_tesseract()
+
 import customtkinter as ctk
 from ui.pdf_window import PdfWindow
 

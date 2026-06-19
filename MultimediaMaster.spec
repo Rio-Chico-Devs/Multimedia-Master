@@ -77,6 +77,16 @@ for _pkg in _THIRD_PARTY:
     binaries += _b
     hiddenimports += _h
 
+# Bundle a vendored Tesseract OCR copy if the developer placed one at
+# vendor/tesseract/ before building (see vendor/tesseract/README.md) — this
+# is what makes OCR / scanned-PDF-translation work on a customer's PC with
+# ZERO separate installation. Optional: if the folder is missing, the build
+# still succeeds; those features just fall back to needing a system-wide
+# Tesseract install, exactly like running from source today.
+_VENDOR_TESSERACT = ROOT / "vendor" / "tesseract"
+if _VENDOR_TESSERACT.is_dir():
+    datas.append((str(_VENDOR_TESSERACT), "vendor/tesseract"))
+
 a = Analysis(
     ["launcher.py"],
     pathex=[str(ROOT)],
