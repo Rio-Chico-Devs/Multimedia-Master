@@ -184,6 +184,15 @@ class PdfTranslatorEngine:
         total = doc.page_count or 1
         pages_done = 0
 
+        # Track how many lines actually translated vs. failed. The per-line
+        # fallback below keeps one bad line from killing the whole job, but if
+        # EVERY line fails (e.g. the language pair isn't really installed, or
+        # the MT model can't load) the output is just a copy of the source —
+        # we must report that as an error, not a silent "success".
+        translated_ok    = 0
+        translate_errors = 0
+        first_error      = ""
+
         try:
             for i, page in enumerate(doc):
                 if cancel_event is not None and cancel_event.is_set():
@@ -205,8 +214,12 @@ class PdfTranslatorEngine:
                         # fall back to leaving that one line untranslated.
                         try:
                             li["translated"] = translate_text(li["text"], src, tgt, glossary)
-                        except Exception:
+                            translated_ok += 1
+                        except Exception as exc:
                             li["translated"] = li["text"]
+                            translate_errors += 1
+                            if not first_error:
+                                first_error = str(exc)
                     # apply_redactions() unconditionally drops every link
                     # overlapping a redacted rect (pymupdf docs/wiki) — a
                     # text line under a hyperlink is the common case (URLs,
@@ -234,6 +247,20 @@ class PdfTranslatorEngine:
                     progress_cb(pages_done / total)
 
             cancelled = cancel_event is not None and cancel_event.is_set()
+
+            # Every line failed to translate → the output is an unchanged copy
+            # of the source. Surface the real cause instead of pretending the
+            # translation worked (the common case: the chosen language pair was
+            # never downloaded, or its model can't be loaded at runtime).
+            if not cancelled and translated_ok == 0 and translate_errors > 0:
+                doc.close()
+                return PdfResult(
+                    output=output_path, success=False, page_count=pages_done,
+                    error=(f"Nessuna riga è stata tradotta: la coppia di lingue "
+                           f"{src}→{tgt} non risulta utilizzabile. Apri "
+                           f"'Gestisci lingue' e scarica/reinstalla la coppia. "
+                           f"Dettaglio tecnico: {first_error}"))
+
             doc.save(str(output_path))
             doc.close()
             return PdfResult(output=output_path, success=True, cancelled=cancelled,
