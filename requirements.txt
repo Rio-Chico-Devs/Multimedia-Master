@@ -22,7 +22,8 @@ pymupdf>=1.24.13,<2       # pip install pymupdf  (also known as fitz)
 # ── PDF text extraction (optional, better layout than pypdf) ──────────────────
 pdfplumber>=0.10.0,<1
 
-# ── OCR — searchable PDF (optional, also needs Tesseract binary installed) ────
+# ── OCR — searchable PDF + scanned-page text for Translate tab (optional, ─────
+#    also needs the Tesseract binary installed) ───────────────────────────────
 # pytesseract>=0.3.10
 
 # ── PDF translation — offline neural MT (optional) ────────────────────────────

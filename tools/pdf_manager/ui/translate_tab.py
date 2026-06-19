@@ -445,6 +445,9 @@ class TranslateTab(ctk.CTkFrame):
             self._status.ok(f"Annullato — {result.page_count} pagine tradotte "
                              f"su {result.output.name}")
         elif result.success:
-            self._status.ok(f"Tradotto: {result.output.name}")
+            msg = f"Tradotto: {result.output.name}"
+            if result.warning:
+                msg += f"  ⚠ {result.warning}"
+            self._status.ok(msg)
         else:
             self._status.err(result.error or "Traduzione interrotta.")

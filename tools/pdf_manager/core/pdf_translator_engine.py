@@ -45,6 +45,7 @@ class PdfResult:
     page_count: int = 0
     file_size:  int = 0
     error:      str = ""
+    warning:    str = ""
 
 
 def _ocr_available() -> bool:
@@ -189,9 +190,14 @@ class PdfTranslatorEngine:
         # EVERY line fails (e.g. the language pair isn't really installed, or
         # the MT model can't load) the output is just a copy of the source —
         # we must report that as an error, not a silent "success".
-        translated_ok    = 0
-        translate_errors = 0
-        first_error      = ""
+        translated_ok      = 0
+        translate_errors   = 0
+        first_error        = ""
+        # A scanned page with no digital text needs OCR to recover anything —
+        # if the user asked for it but pytesseract/Tesseract isn't installed,
+        # that page is silently left untouched. Count it so the result can
+        # say so explicitly instead of reporting a fake full-document success.
+        ocr_needed_missing = 0
 
         try:
             for i, page in enumerate(doc):
@@ -199,13 +205,16 @@ class PdfTranslatorEngine:
                     break
 
                 lines = _digital_text_lines(page)
-                if not lines and ocr_ready:
-                    try:
-                        lines = _ocr_lines(page, src)
-                    except RuntimeError:
-                        # OCR timed out on this page — leave it untouched
-                        # rather than aborting the whole document.
-                        lines = []
+                if not lines:
+                    if ocr_ready:
+                        try:
+                            lines = _ocr_lines(page, src)
+                        except RuntimeError:
+                            # OCR timed out on this page — leave it untouched
+                            # rather than aborting the whole document.
+                            lines = []
+                    elif include_scanned:
+                        ocr_needed_missing += 1
 
                 if lines:
                     for li in lines:
@@ -248,23 +257,44 @@ class PdfTranslatorEngine:
 
             cancelled = cancel_event is not None and cancel_event.is_set()
 
-            # Every line failed to translate → the output is an unchanged copy
-            # of the source. Surface the real cause instead of pretending the
-            # translation worked (the common case: the chosen language pair was
-            # never downloaded, or its model can't be loaded at runtime).
-            if not cancelled and translated_ok == 0 and translate_errors > 0:
+            if not cancelled and translated_ok == 0:
                 doc.close()
+                # Nothing was translated anywhere in the document — figure out
+                # why and report it instead of pretending the job succeeded.
+                if ocr_needed_missing > 0 and translate_errors == 0:
+                    return PdfResult(
+                        output=output_path, success=False, page_count=pages_done,
+                        error=(f"Il PDF sembra scansionato (nessun testo "
+                               f"digitale) e l'OCR non è disponibile: "
+                               f"installa pytesseract (pip install pytesseract) "
+                               f"e Tesseract OCR (per Windows: il pacchetto "
+                               f"UB-Mannheim), poi riprova. "
+                               f"{ocr_needed_missing} pagina/e coinvolta/e."))
+                if translate_errors > 0:
+                    # Every line failed to translate → the output is an
+                    # unchanged copy of the source (the common case: the
+                    # chosen language pair was never downloaded, or its
+                    # model can't be loaded at runtime).
+                    return PdfResult(
+                        output=output_path, success=False, page_count=pages_done,
+                        error=(f"Nessuna riga è stata tradotta: la coppia di "
+                               f"lingue {src}→{tgt} non risulta utilizzabile. "
+                               f"Apri 'Gestisci lingue' e scarica/reinstalla la "
+                               f"coppia. Dettaglio tecnico: {first_error}"))
                 return PdfResult(
                     output=output_path, success=False, page_count=pages_done,
-                    error=(f"Nessuna riga è stata tradotta: la coppia di lingue "
-                           f"{src}→{tgt} non risulta utilizzabile. Apri "
-                           f"'Gestisci lingue' e scarica/reinstalla la coppia. "
-                           f"Dettaglio tecnico: {first_error}"))
+                    error="Nessun testo trovato nel PDF: nessuna pagina conteneva "
+                          "testo da tradurre.")
 
             doc.save(str(output_path))
             doc.close()
+            warning = ""
+            if ocr_needed_missing > 0:
+                warning = (f"{ocr_needed_missing} pagina/e scansionata/e ignorata/e: "
+                           f"installa pytesseract + Tesseract OCR per tradurle.")
             return PdfResult(output=output_path, success=True, cancelled=cancelled,
-                              page_count=pages_done, file_size=output_path.stat().st_size)
+                              page_count=pages_done, warning=warning,
+                              file_size=output_path.stat().st_size)
         except Exception as exc:
             # Best-effort: keep whatever pages were already translated
             # instead of discarding the whole job on one fatal error.
