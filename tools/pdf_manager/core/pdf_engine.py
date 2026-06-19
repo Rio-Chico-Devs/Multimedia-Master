@@ -143,20 +143,23 @@ class PdfEngine:
     def merge(self, pdfs: list[Path], output: Path) -> PdfResult:
         """Merge multiple PDFs into one, preserving order."""
         try:
+            from contextlib import ExitStack
             from pypdf import PdfWriter, PdfReader
 
             writer = PdfWriter()
-            for pdf in pdfs:
-                # Open the underlying file explicitly so the OS handle is
-                # released as soon as this PDF's pages have been copied —
-                # PdfReader itself does not close it for us.
-                with open(pdf, "rb") as fh:
+            # Keep every source handle open until AFTER writer.write() — pypdf's
+            # add_page() can read page content lazily, so closing a reader's
+            # file before the final write risks a corrupt/failed merge. ExitStack
+            # closes them all once the write completes, still fixing the leak.
+            with ExitStack() as stack:
+                for pdf in pdfs:
+                    fh = stack.enter_context(open(pdf, "rb"))
                     reader = PdfReader(fh)
                     for page in reader.pages:
                         writer.add_page(page)
 
-            with open(output, "wb") as f:
-                writer.write(f)
+                with open(output, "wb") as f:
+                    writer.write(f)
             return self._ok(output)
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))

@@ -355,6 +355,18 @@ class EnhanceTab(ctk.CTkFrame):
             out_dir = self._out_dir or path.parent
             output  = out_dir / (path.stem + ext)
 
+            # Safety: enhance ends in an ffmpeg "-y" write; if output resolves
+            # to the source (default format "Stesso del file" + default folder)
+            # ffmpeg would truncate the file while still decoding it. Refuse
+            # the in-place write, exactly like the Convert tab.
+            if output.resolve() == path.resolve():
+                err = "Output identico al sorgente (stesso nome/formato)."
+                errors.append(f"{path.name}: {err}")
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✗", text_color="#f44336"))
+                self.after(0, self._status.busy, f"In corso ({i+1}/{total})…")
+                continue
+
             self.after(0, lambda l=lbl: l.configure(
                 text="⏳", text_color="#aaa"))
             try:

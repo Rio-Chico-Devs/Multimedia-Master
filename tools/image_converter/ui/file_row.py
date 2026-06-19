@@ -153,11 +153,12 @@ class FileRow(ctk.CTkFrame):
                 w, h = pil.width, pil.height
                 pil.draft("RGB", (s * 2, s * 2))
                 pil.thumbnail((s, s), Image.LANCZOS)
-                # thumbnail() already forces a full decode; load() makes that
-                # explicit so the in-memory image stays usable once the file
-                # handle below is closed (Pillow docs: Image.open + load()).
-                pil.load()
-            self.after(0, self._update_thumb, pil, f"{w}×{h} px")
+                # Hand _update_thumb a DETACHED copy: leaving the `with` closes
+                # the underlying file, and on exit Pillow may destroy the
+                # decoded core of `pil` itself — copy() is an independent
+                # in-memory image that stays usable after the file is closed.
+                thumb = pil.copy()
+            self.after(0, self._update_thumb, thumb, f"{w}×{h} px")
         except Exception:
             pass
 

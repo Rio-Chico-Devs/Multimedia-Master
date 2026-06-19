@@ -281,19 +281,26 @@ class MetadataCleaner:
         (duration/loop/disposal) so playback is identical to the source.
         """
         icc = img.info.get("icc_profile") if keep_icc else None
-        frames = [frame.copy() for frame in ImageSequence.Iterator(img)]
+
+        # Collect each frame's pixels AND its own timing/disposal during the
+        # iteration — frame.info reflects the currently-seeked frame, so this
+        # must be read per-frame (not once from img.info, which would force
+        # frame 0's duration onto every frame and change playback speed for
+        # variable-timing GIFs).
+        frames:    list = []
+        durations: list = []
+        disposals: list = []
+        for frame in ImageSequence.Iterator(img):
+            frames.append(frame.copy())
+            durations.append(frame.info.get("duration", 0))
+            disposals.append(frame.info.get("disposal", 0))
 
         kw: dict = {
             "save_all": True,
             "append_images": frames[1:],
             "loop": img.info.get("loop", 0),
+            "duration": durations,
         }
-        duration = img.info.get("duration")
-        if duration is not None:
-            kw["duration"] = duration
-        disposal = img.info.get("disposal")
-        if disposal is not None:
-            kw["disposal"] = disposal
 
         if fmt == "WEBP":
             kw["lossless"] = img.info.get("lossless", False)
@@ -303,6 +310,10 @@ class MetadataCleaner:
                 kw["icc_profile"] = icc
         elif fmt == "GIF":
             kw["optimize"] = True
+            # Per-frame disposal preserves correct compositing (e.g. disposal=2
+            # "restore to background") for GIFs that mix disposal methods.
+            if any(disposals):
+                kw["disposal"] = disposals
             transparency = img.info.get("transparency")
             if transparency is not None:
                 kw["transparency"] = transparency
