@@ -149,10 +149,14 @@ class FileRow(ctk.CTkFrame):
     def _load_thumb(self) -> None:
         s = self.THUMB_SIZE
         try:
-            pil = Image.open(self.file_path)
-            w, h = pil.width, pil.height
-            pil.draft("RGB", (s * 2, s * 2))
-            pil.thumbnail((s, s), Image.LANCZOS)
+            with Image.open(self.file_path) as pil:
+                w, h = pil.width, pil.height
+                pil.draft("RGB", (s * 2, s * 2))
+                pil.thumbnail((s, s), Image.LANCZOS)
+                # thumbnail() already forces a full decode; load() makes that
+                # explicit so the in-memory image stays usable once the file
+                # handle below is closed (Pillow docs: Image.open + load()).
+                pil.load()
             self.after(0, self._update_thumb, pil, f"{w}×{h} px")
         except Exception:
             pass

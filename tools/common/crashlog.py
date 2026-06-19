@@ -97,6 +97,18 @@ def install(log_path: Path) -> None:
 
     threading.excepthook = _thread_hook
 
+    # Tkinter never routes callback exceptions (button commands, bindings,
+    # `after()` callbacks) through sys.excepthook — Tk's mainloop catches
+    # them itself and calls Tk.report_callback_exception, which by default
+    # just prints to stderr and keeps the app "running" in a half-broken
+    # state (e.g. a status label stuck on "in corso…" forever). Override it
+    # globally so those exceptions reach the log exactly like any other.
+    import tkinter
+    def _tk_callback_hook(exc_type, exc_value, exc_tb) -> None:
+        _write("UNCAUGHT EXCEPTION (Tk callback)",
+               "".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+    tkinter.Tk.report_callback_exception = staticmethod(_tk_callback_hook)
+
     _write("STARTUP", f"Python {sys.version}\nCWD: {Path.cwd()}")
 
 

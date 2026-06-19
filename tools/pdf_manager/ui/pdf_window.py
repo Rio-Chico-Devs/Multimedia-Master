@@ -42,6 +42,20 @@ class PdfWindow(ctk.CTk):
         add_about_button(self, "Gestione PDF")
         self._init_dnd()
         self._build()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ── Close ────────────────────────────────────────────────────────────────
+
+    def _on_close(self) -> None:
+        # The visual editor (Modifica tab) keeps a pymupdf Document open for
+        # the whole session (PdfEditorEngine._doc) — release its file handle
+        # before the process exits instead of relying on GC/finalizers.
+        if hasattr(self, "_edit_tab"):
+            try:
+                self._edit_tab._engine.close()
+            except Exception:
+                pass
+        self.destroy()
 
     # ── Drag & drop (window-level, avoids CTkScrollableFrame canvas issue) ──
 
@@ -101,7 +115,9 @@ class PdfWindow(ctk.CTk):
             tabs.add(name)
 
         # Modifica tab (visual editor) — first so it's prominent
-        EditTab(tabs.tab("Modifica")).pack(fill="both", expand=True)
+        edit_tab = EditTab(tabs.tab("Modifica"))
+        edit_tab.pack(fill="both", expand=True)
+        self._edit_tab = edit_tab
 
         # Instantiate each tab and keep references to their file lists
         convert = ConvertTab(tabs.tab("Converti"))

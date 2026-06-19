@@ -328,6 +328,17 @@ class ConvertTab(ctk.CTkFrame):
             out_dir = self._out_dir or path.parent
             output  = out_dir / (path.stem + ext)
             self.after(0, lambda l=lbl: l.configure(text="⏳", text_color="#aaa"))
+            # Safety: never let ffmpeg read and write the same file —
+            # it truncates the source while still decoding it.
+            if output.resolve() == path.resolve():
+                err_msg = "Output identico al sorgente (stesso nome/formato)."
+                errors.append(f"{path.name}: {err_msg}")
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✗", text_color="#f44336"))
+                self.after(0, self._progress.set, (i + 1) / total)
+                self.after(0, self._status.busy,
+                           f"In corso ({i+1}/{total})…")
+                continue
             try:
                 result = self._engine.convert(path, output, fmt, bitrate, sr, ch,
                                               cancel_event=self._cancel_event)

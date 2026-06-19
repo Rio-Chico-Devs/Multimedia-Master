@@ -23,6 +23,7 @@ class PdfResult:
     page_count: int  = 0
     file_size:  int  = 0
     error:      str  = ""
+    warning:    str  = ""   # non-fatal caveat to surface alongside a success
 
 
 @dataclass
@@ -146,9 +147,13 @@ class PdfEngine:
 
             writer = PdfWriter()
             for pdf in pdfs:
-                reader = PdfReader(str(pdf))
-                for page in reader.pages:
-                    writer.add_page(page)
+                # Open the underlying file explicitly so the OS handle is
+                # released as soon as this PDF's pages have been copied —
+                # PdfReader itself does not close it for us.
+                with open(pdf, "rb") as fh:
+                    reader = PdfReader(fh)
+                    for page in reader.pages:
+                        writer.add_page(page)
 
             with open(output, "wb") as f:
                 writer.write(f)
@@ -168,32 +173,33 @@ class PdfEngine:
         try:
             from pypdf import PdfReader, PdfWriter
 
-            reader  = PdfReader(str(pdf))
-            total   = len(reader.pages)
             results = []
+            with open(pdf, "rb") as fh:
+                reader  = PdfReader(fh)
+                total   = len(reader.pages)
 
-            for spec in ranges_str.split(","):
-                spec = spec.strip()
-                if not spec:
-                    continue
-                if "-" in spec:
-                    s, e = spec.split("-", 1)
-                    start, end = int(s) - 1, int(e) - 1
-                else:
-                    start = end = int(spec) - 1
+                for spec in ranges_str.split(","):
+                    spec = spec.strip()
+                    if not spec:
+                        continue
+                    if "-" in spec:
+                        s, e = spec.split("-", 1)
+                        start, end = int(s) - 1, int(e) - 1
+                    else:
+                        start = end = int(spec) - 1
 
-                start = max(0, start)
-                end   = min(total - 1, end)
+                    start = max(0, start)
+                    end   = min(total - 1, end)
 
-                writer = PdfWriter()
-                for i in range(start, end + 1):
-                    writer.add_page(reader.pages[i])
+                    writer = PdfWriter()
+                    for i in range(start, end + 1):
+                        writer.add_page(reader.pages[i])
 
-                out = self._unique_path(
-                    output_dir / f"{pdf.stem}_pag{start+1}-{end+1}.pdf")
-                with open(out, "wb") as f:
-                    writer.write(f)
-                results.append(self._ok(out))
+                    out = self._unique_path(
+                        output_dir / f"{pdf.stem}_pag{start+1}-{end+1}.pdf")
+                    with open(out, "wb") as f:
+                        writer.write(f)
+                    results.append(self._ok(out))
 
             return results
         except Exception as exc:
@@ -206,21 +212,22 @@ class PdfEngine:
         try:
             from pypdf import PdfReader, PdfWriter
 
-            reader  = PdfReader(str(pdf))
-            total   = len(reader.pages)
             results = []
+            with open(pdf, "rb") as fh:
+                reader  = PdfReader(fh)
+                total   = len(reader.pages)
 
-            for chunk, start in enumerate(range(0, total, n), start=1):
-                end    = min(start + n, total)
-                writer = PdfWriter()
-                for i in range(start, end):
-                    writer.add_page(reader.pages[i])
+                for chunk, start in enumerate(range(0, total, n), start=1):
+                    end    = min(start + n, total)
+                    writer = PdfWriter()
+                    for i in range(start, end):
+                        writer.add_page(reader.pages[i])
 
-                out = self._unique_path(
-                    output_dir / f"{pdf.stem}_parte{chunk}.pdf")
-                with open(out, "wb") as f:
-                    writer.write(f)
-                results.append(self._ok(out))
+                    out = self._unique_path(
+                        output_dir / f"{pdf.stem}_parte{chunk}.pdf")
+                    with open(out, "wb") as f:
+                        writer.write(f)
+                    results.append(self._ok(out))
 
             return results
         except Exception as exc:
@@ -242,25 +249,48 @@ class PdfEngine:
         try:
             from pypdf import PdfWriter, PdfReader
 
-            reader = PdfReader(str(pdf))
-            writer = PdfWriter()
-            writer.clone_reader_document_root(reader)
-            if strip_meta:
-                self._strip_writer_metadata(writer)
+            with open(pdf, "rb") as fh:
+                reader = PdfReader(fh)
 
-            # Build permission flags (PDF spec bit positions)
-            perms = 0
-            if allow_print: perms |= (1 << 2) | (1 << 11)  # print + high quality
-            if allow_copy:  perms |= (1 << 4)               # copy text
+                if reader.is_encrypted:
+                    # clone_reader_document_root() on a still-encrypted reader
+                    # produces a structurally broken, double-encrypted output
+                    # (pypdf cannot read the object streams it needs to clone).
+                    # protect_tab.py's encrypt panel has no field for an
+                    # existing source password, so the only password we can
+                    # try here is the empty one — i.e. "this PDF has no real
+                    # open-password, only owner/permission restrictions".
+                    # If even that fails, the source must be unlocked first
+                    # via the Decrypt panel before it can be re-protected.
+                    try:
+                        empty_ok = reader.decrypt("").name != "NOT_DECRYPTED"
+                    except Exception:
+                        empty_ok = False
+                    if not empty_ok:
+                        return PdfResult(
+                            output=output, success=False,
+                            error="Il PDF di origine è già protetto da password. "
+                                  "Rimuovi prima la protezione (pannello "
+                                  "\"Rimuovi protezione\") e poi riprova.")
 
-            writer.encrypt(
-                user_password=user_pw,
-                owner_password=owner_pw or user_pw,
-                algorithm="AES-256",   # R6, PDF 2.0 standard (R5 è una bozza deprecata)
-                permissions_flag=perms if perms else -4,
-            )
-            with open(output, "wb") as f:
-                writer.write(f)
+                writer = PdfWriter()
+                writer.clone_reader_document_root(reader)
+                if strip_meta:
+                    self._strip_writer_metadata(writer)
+
+                # Build permission flags (PDF spec bit positions)
+                perms = 0
+                if allow_print: perms |= (1 << 2) | (1 << 11)  # print + high quality
+                if allow_copy:  perms |= (1 << 4)               # copy text
+
+                writer.encrypt(
+                    user_password=user_pw,
+                    owner_password=owner_pw or user_pw,
+                    algorithm="AES-256",   # R6, PDF 2.0 standard (R5 è una bozza deprecata)
+                    permissions_flag=perms if perms else -4,
+                )
+                with open(output, "wb") as f:
+                    writer.write(f)
             return self._ok(output)
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))
@@ -271,20 +301,62 @@ class PdfEngine:
         try:
             from pypdf import PdfReader, PdfWriter
 
-            reader = PdfReader(str(pdf))
-            if reader.is_encrypted:
-                result = reader.decrypt(password)
-                if result.name == "NOT_DECRYPTED":
-                    return PdfResult(output=output, success=False,
-                                     error="Password errata o algoritmo non supportato.")
+            warning = ""
+            with open(pdf, "rb") as fh:
+                reader = PdfReader(fh)
+                if reader.is_encrypted:
+                    # pypdf's decrypt(password) tries `password` as the user
+                    # password first, then as the owner password. A PDF that
+                    # is only owner/permission-restricted (no real "open"
+                    # password) has an EMPTY user password — so decrypt()
+                    # returns a successful PasswordType for ANY string the
+                    # caller passes, including a wrong one, because the
+                    # empty-user-password check still succeeds underneath.
+                    # That means a non-empty password typed by the user can
+                    # be silently ignored while the operation still reports
+                    # success — i.e. their input was never actually verified
+                    # against anything.
+                    #
+                    # Detect this by independently checking whether the empty
+                    # password alone already opens the document.
+                    try:
+                        empty_opens = reader.decrypt("").name != "NOT_DECRYPTED"
+                    except Exception:
+                        empty_opens = False
 
-            writer = PdfWriter()
-            writer.clone_reader_document_root(reader)
-            if strip_meta:
-                self._strip_writer_metadata(writer)
-            with open(output, "wb") as f:
-                writer.write(f)
-            return self._ok(output)
+                    if empty_opens:
+                        # The document needed no real password — the user's
+                        # input (if any) cannot be confirmed as "the right
+                        # one" via decrypt() alone, only that emptiness was
+                        # enough. Report success honestly rather than imply
+                        # their specific password was checked.
+                        if password:
+                            warning = ("Questo PDF non richiedeva una password "
+                                       "di apertura: solo le restrizioni "
+                                       "(proprietario) erano attive. La "
+                                       "password inserita non è stata "
+                                       "verificata perché non necessaria.")
+                    else:
+                        # Re-open: the empty-password probe above mutates the
+                        # reader's internal crypt state, so attempt the user's
+                        # actual password against a clean reader.
+                        fh.seek(0)
+                        reader = PdfReader(fh)
+                        result = reader.decrypt(password)
+                        if result.name == "NOT_DECRYPTED":
+                            return PdfResult(
+                                output=output, success=False,
+                                error="Password errata o algoritmo non supportato.")
+
+                writer = PdfWriter()
+                writer.clone_reader_document_root(reader)
+                if strip_meta:
+                    self._strip_writer_metadata(writer)
+                with open(output, "wb") as f:
+                    writer.write(f)
+            result = self._ok(output)
+            result.warning = warning
+            return result
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))
 
@@ -314,14 +386,15 @@ class PdfEngine:
         try:
             from pypdf import PdfWriter
 
-            writer = PdfWriter(clone_from=str(pdf))
-            writer.compress_identical_objects(
-                remove_identicals=True, remove_orphans=True)
-            for page in writer.pages:
-                page.compress_content_streams()
+            with open(pdf, "rb") as fh:
+                writer = PdfWriter(clone_from=fh)
+                writer.compress_identical_objects(
+                    remove_identicals=True, remove_orphans=True)
+                for page in writer.pages:
+                    page.compress_content_streams()
 
-            with open(output, "wb") as f:
-                writer.write(f)
+                with open(output, "wb") as f:
+                    writer.write(f)
             return self._ok(output)
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))
@@ -332,43 +405,44 @@ class PdfEngine:
         """Extract text, metadata, form fields and generate a summary."""
         from pypdf import PdfReader
 
-        reader = PdfReader(str(pdf))
-        encrypted = reader.is_encrypted
-        if encrypted and password:
-            reader.decrypt(password)
+        with open(pdf, "rb") as fh:
+            reader = PdfReader(fh)
+            encrypted = reader.is_encrypted
+            if encrypted and password:
+                reader.decrypt(password)
 
-        # Metadata
-        meta: dict[str, str] = {}
-        if reader.metadata:
-            for k, v in reader.metadata.items():
-                if v is not None:
-                    meta[str(k).lstrip("/")] = str(v)
+            # Metadata
+            meta: dict[str, str] = {}
+            if reader.metadata:
+                for k, v in reader.metadata.items():
+                    if v is not None:
+                        meta[str(k).lstrip("/")] = str(v)
 
-        # AcroForm fields
-        fields     = reader.get_fields() or {}
-        field_names = list(fields.keys())
+            # AcroForm fields
+            fields     = reader.get_fields() or {}
+            field_names = list(fields.keys())
 
-        # Text extraction — prefer pdfplumber (better layout), fallback to pypdf
-        full_text = self._extract_text(pdf, password, reader)
+            # Text extraction — prefer pdfplumber (better layout), fallback to pypdf
+            full_text = self._extract_text(pdf, password, reader)
 
-        # Visually detected form-like patterns
-        suggested = self._detect_visual_fields(full_text)
+            # Visually detected form-like patterns
+            suggested = self._detect_visual_fields(full_text)
 
-        words = [w for w in full_text.split() if w.strip()]
-        summary = self._extractive_summary(full_text)
+            words = [w for w in full_text.split() if w.strip()]
+            summary = self._extractive_summary(full_text)
 
-        return PdfAnalysis(
-            page_count=len(reader.pages),
-            word_count=len(words),
-            char_count=len(full_text),
-            full_text=full_text,
-            summary=summary,
-            encrypted=encrypted,
-            has_acroform=bool(field_names),
-            form_fields=field_names,
-            suggested_fields=suggested,
-            metadata=meta,
-        )
+            return PdfAnalysis(
+                page_count=len(reader.pages),
+                word_count=len(words),
+                char_count=len(full_text),
+                full_text=full_text,
+                summary=summary,
+                encrypted=encrypted,
+                has_acroform=bool(field_names),
+                form_fields=field_names,
+                suggested_fields=suggested,
+                metadata=meta,
+            )
 
     # ── Private helpers ───────────────────────────────────────────────────────
 

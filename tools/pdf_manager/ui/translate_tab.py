@@ -395,6 +395,16 @@ class TranslateTab(ctk.CTkFrame):
         out_path = out_dir / f"{pdf.stem}_tradotto_{tgt}.pdf"
         glossary = self._settings.get(_GLOSSARY_KEY, {})
 
+        # Safety: never let the translated output overwrite the source PDF
+        # (can happen re-translating an already-translated file whose name
+        # already ends in "_tradotto_<tgt>.pdf" back into the same folder).
+        if out_path.resolve() == pdf.resolve():
+            self._status.err(
+                "Il file di destinazione coincide con il file di origine: "
+                "l'operazione è stata annullata per non sovrascrivere il "
+                "PDF originale.")
+            return
+
         self._busy = True
         self._cancel_event.clear()
         self._btn_translate.configure(state="disabled")

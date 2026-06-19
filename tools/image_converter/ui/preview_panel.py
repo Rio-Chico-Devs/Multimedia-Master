@@ -202,7 +202,13 @@ class PreviewPanel(ctk.CTkFrame):
             # a 20 MP photo needs ~70 MB uncompressed; draft() keeps it ≤ 18 MB.
             # This is a no-op for PNG, WebP, TIFF and other formats.
             pil.draft("RGB", (3840, 2160))
+            # load() forces the full decode into memory now, so the file
+            # handle can be closed immediately after while the returned,
+            # in-memory image remains usable for the caller (Pillow docs:
+            # Image.open is lazy; load() makes the decode — and the close
+            # below — safe).
             pil.load()
+            pil.close()
             size_b   = path.stat().st_size
             size_str = (f"{size_b / 1024:.0f} KB" if size_b < 1_048_576
                         else f"{size_b / 1_048_576:.2f} MB")

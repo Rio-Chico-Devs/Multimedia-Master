@@ -316,13 +316,26 @@ class AudioEngine:
         merge_stderr: bool = False,
     ) -> tuple[int | None, str, bool]:
         pipe = subprocess.STDOUT if merge_stderr else subprocess.PIPE
+        # New process group/session so cancel can kill the whole tree, not
+        # just the direct child — demucs spawns worker subprocesses that
+        # terminate()/kill() on the parent alone would otherwise orphan,
+        # leaving them pinning the CPU after "Annulla". On Windows this
+        # shares the same "creationflags" kwarg as NO_WINDOW, so OR the
+        # flags together instead of splatting two dicts with the same key.
+        if sys.platform == "win32":
+            _group_kw = {
+                "creationflags": _NO_WINDOW_KW.get("creationflags", 0)
+                                 | subprocess.CREATE_NEW_PROCESS_GROUP
+            }
+        else:
+            _group_kw = {**_NO_WINDOW_KW, "start_new_session": True}
         proc = subprocess.Popen(
             cmd,
             stdout=(subprocess.PIPE if merge_stderr else subprocess.DEVNULL),
             stderr=pipe,
             encoding="utf-8",
             errors="replace",
-            **_NO_WINDOW_KW,
+            **_group_kw,
         )
         stream = proc.stdout if merge_stderr else proc.stderr
         buf: list[str] = []
@@ -343,19 +356,42 @@ class AudioEngine:
         while proc.poll() is None:
             if cancel_event is not None and cancel_event.is_set():
                 cancelled = True
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                AudioEngine._kill_tree(proc)
                 break
             time.sleep(0.1)
 
         drainer.join(timeout=1)
         return proc.returncode, "".join(buf), cancelled
+
+    @staticmethod
+    def _kill_tree(proc: "subprocess.Popen") -> None:
+        """Kill proc and every descendant it spawned (see _group_kw above)."""
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=5, **_NO_WINDOW_KW,
+                )
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                try: proc.kill()
+                except Exception: pass
+        else:
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+                try: proc.wait(timeout=2)
+                except Exception: pass
 
     # ── Probe ─────────────────────────────────────────────────────────────
 

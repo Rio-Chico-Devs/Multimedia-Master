@@ -203,10 +203,18 @@ class ConvertTab(ctk.CTkFrame):
                                    f"⏹ Annullato  ·  {ok}/{total} creati", "cancel")
                         return
                     self.after(0, self._status.busy, f"({i+1}/{total})  {img.name}")
+
+                    per_file_output = output.parent / f"{img.stem}.pdf"
+                    # Safety: never let a per-image output overwrite the
+                    # source image itself (possible if an input file is
+                    # already named "<stem>.pdf").
+                    if per_file_output.resolve() == img.resolve():
+                        fail += 1
+                        continue
                     try:
                         results = self._engine.images_to_pdf(
                             images=[img],
-                            output=output.parent / f"{img.stem}.pdf",
+                            output=per_file_output,
                             ocr=ocr,
                             one_per_file=False,
                             lang=lang,
@@ -222,6 +230,16 @@ class ConvertTab(ctk.CTkFrame):
                     msg += f"  ·  {fail} errori"
                 self.after(0, self._done, msg, "ok" if not fail else "err")
             else:
+                # Safety: never let the single merged output overwrite one
+                # of the source images.
+                out_resolved = output.resolve()
+                if any(out_resolved == img.resolve() for img in images):
+                    self.after(0, self._done,
+                               "Il nome/cartella di destinazione coincide con "
+                               "una delle immagini di origine: l'operazione "
+                               "è stata annullata per non sovrascriverla.",
+                               "err")
+                    return
                 results = self._engine.images_to_pdf(
                     images=images,
                     output=output,

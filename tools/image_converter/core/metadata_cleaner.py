@@ -25,7 +25,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageOps, ImageSequence
 
 
 # EXIF tag ids (IFD0 / Exif IFD) → human-readable category
@@ -243,10 +243,18 @@ class MetadataCleaner:
 
     def _clean_reencode(self, src: Path, output: Path, keep_icc: bool) -> bool:
         with Image.open(src) as img:
-            img = ImageOps.exif_transpose(img)
-            icc = img.info.get("icc_profile") if keep_icc else None
             fmt = (src.suffix.lower().lstrip(".")
                    .replace("jpg", "jpeg").replace("tif", "tiff").upper())
+
+            # Animated GIF/WebP: exif_transpose() only returns a single-frame
+            # copy, which would silently drop every frame but the first.
+            # Collect ALL frames instead and re-save with the original
+            # timing/loop so the output animates identically to the input.
+            if getattr(img, "is_animated", False) and getattr(img, "n_frames", 1) > 1:
+                return self._clean_reencode_animated(img, output, fmt, keep_icc)
+
+            img = ImageOps.exif_transpose(img)
+            icc = img.info.get("icc_profile") if keep_icc else None
             kw: dict = {}
             if fmt == "WEBP":
                 # Re-encode lossless WebP losslessly; lossy gets q=95
@@ -261,4 +269,43 @@ class MetadataCleaner:
             if icc and fmt in ("WEBP", "TIFF"):
                 kw["icc_profile"] = icc
             img.save(output, format=fmt or None, **kw)
+        return False
+
+    @staticmethod
+    def _clean_reencode_animated(
+        img: Image.Image, output: Path, fmt: str, keep_icc: bool
+    ) -> bool:
+        """
+        Re-encode every frame of an animated GIF/WebP, stripping metadata
+        while preserving each frame's pixel data and the original timing
+        (duration/loop/disposal) so playback is identical to the source.
+        """
+        icc = img.info.get("icc_profile") if keep_icc else None
+        frames = [frame.copy() for frame in ImageSequence.Iterator(img)]
+
+        kw: dict = {
+            "save_all": True,
+            "append_images": frames[1:],
+            "loop": img.info.get("loop", 0),
+        }
+        duration = img.info.get("duration")
+        if duration is not None:
+            kw["duration"] = duration
+        disposal = img.info.get("disposal")
+        if disposal is not None:
+            kw["disposal"] = disposal
+
+        if fmt == "WEBP":
+            kw["lossless"] = img.info.get("lossless", False)
+            kw["quality"] = 95
+            kw["method"] = 4
+            if icc:
+                kw["icc_profile"] = icc
+        elif fmt == "GIF":
+            kw["optimize"] = True
+            transparency = img.info.get("transparency")
+            if transparency is not None:
+                kw["transparency"] = transparency
+
+        frames[0].save(output, format=fmt or None, **kw)
         return False
