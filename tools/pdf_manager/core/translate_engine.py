@@ -42,10 +42,18 @@ def installed_pairs() -> list[tuple[str, str, str, str]]:
     _require_argos()
     import argostranslate.translate as at
 
+    # `translations_from` holds the translations where `lang` is the SOURCE
+    # (argostranslate's Language.get_translation filters this same list). Read
+    # the source/target off each translation object directly and skip identity
+    # (en->en) entries, which argostranslate auto-adds for every installed
+    # language and are useless / confusing in the language pickers.
     pairs = []
     for lang in at.get_installed_languages():
-        for tr in lang.translations_to:
-            pairs.append((lang.code, lang.name, tr.to_lang.code, tr.to_lang.name))
+        for tr in lang.translations_from:
+            f, t = tr.from_lang, tr.to_lang
+            if f.code == t.code:
+                continue
+            pairs.append((f.code, f.name, t.code, t.name))
     return pairs
 
 
