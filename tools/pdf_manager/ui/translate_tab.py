@@ -179,12 +179,16 @@ class _LanguagePackDialog(ctk.CTkToplevel):
         if not self._available:
             self._status.err("Aggiorna prima l'elenco.")
             return
-        idx = 0
         sel = self._pairs_var.get()
         labels = [f"{fn} ({f}) → {tn} ({t})" for f, fn, t, tn in self._available]
-        if sel in labels:
-            idx = labels.index(sel)
-        src, _, tgt, _ = self._available[idx]
+        if sel not in labels:
+            # The dropdown's current value no longer matches any entry in the
+            # latest catalog (e.g. it was re-fetched in the meantime) — abort
+            # rather than silently falling back to index 0 and downloading a
+            # pair the user never selected.
+            self._status.err("Selezione non valida: aggiorna l'elenco e riprova.")
+            return
+        src, _, tgt, _ = self._available[labels.index(sel)]
         self._status.busy(f"Download {src}→{tgt}…")
         threading.Thread(target=self._worker_install, args=(src, tgt), daemon=True).start()
 
