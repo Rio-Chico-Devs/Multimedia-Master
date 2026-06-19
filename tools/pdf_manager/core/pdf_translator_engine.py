@@ -5,7 +5,8 @@ only the text is replaced.
 Pipeline per page:
   1. Read text lines with their position/size/font via pymupdf's structured
      text dict. If a page has no extractable text (a scanned page), fall
-     back to OCR (pytesseract) to recover line text + position instead.
+     back to OCR (RapidOCR, see common/ocr_engine.py) to recover line text
+     + position instead.
   2. Translate every line (offline, see translate_engine.py).
   3. Redact the original line rectangles (pymupdf "burns" them out — works
      for both vector text and the rendered scan underneath).
@@ -24,14 +25,8 @@ from pathlib import Path
 from typing import Callable
 
 from common.depmsg import pip_hint
+from common.ocr_engine import ocr_available, ocr_image
 from .translate_engine import translate_text
-
-# argostranslate language codes (ISO 639-1) -> Tesseract language codes.
-_TESS_LANG = {
-    "en": "eng", "it": "ita", "fr": "fra", "de": "deu", "es": "spa",
-    "pt": "por", "nl": "nld", "ru": "rus", "zh": "chi_sim", "ja": "jpn",
-    "ar": "ara", "pl": "pol", "tr": "tur", "ko": "kor", "sv": "swe",
-}
 
 _MIN_FONT_SIZE = 5.0
 _OCR_DPI       = 200
@@ -46,15 +41,6 @@ class PdfResult:
     file_size:  int = 0
     error:      str = ""
     warning:    str = ""
-
-
-def _ocr_available() -> bool:
-    try:
-        import pytesseract
-        pytesseract.get_tesseract_version()
-        return True
-    except Exception:
-        return False
 
 
 def _int_to_rgb(color: int) -> tuple[float, float, float]:
@@ -115,40 +101,21 @@ def _digital_text_lines(page) -> list[dict]:
     return lines
 
 
-def _ocr_lines(page, src_lang: str):
+def _ocr_lines(page):
     import fitz
-    import pytesseract
     from PIL import Image
 
     zoom = _OCR_DPI / 72
     pix  = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), alpha=False)
     img  = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
 
-    # timeout: Tesseract può bloccarsi su immagini patologiche — stesso
-    # limite usato da core/pdf_engine.py per la conversione con OCR.
-    data = pytesseract.image_to_data(
-        img, lang=_TESS_LANG.get(src_lang, "eng"),
-        output_type=pytesseract.Output.DICT, timeout=120)
-
-    groups: dict[tuple, dict] = {}
-    for i, word in enumerate(data["text"]):
-        word = word.strip()
-        if not word:
-            continue
-        key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
-        x, y, w, h = (data["left"][i], data["top"][i],
-                      data["width"][i], data["height"][i])
-        g = groups.setdefault(key, {"words": [], "x0": x, "y0": y, "x1": x + w, "y1": y + h})
-        g["words"].append(word)
-        g["x0"] = min(g["x0"], x);     g["y0"] = min(g["y0"], y)
-        g["x1"] = max(g["x1"], x + w); g["y1"] = max(g["y1"], y + h)
-
     lines = []
-    for g in groups.values():
-        height_pt = (g["y1"] - g["y0"]) / zoom
+    for r in ocr_image(img):
+        x0, y0, x1, y1 = r["bbox"]
+        height_pt = (y1 - y0) / zoom
         lines.append({
-            "bbox":  (g["x0"] / zoom, g["y0"] / zoom, g["x1"] / zoom, g["y1"] / zoom),
-            "text":  " ".join(g["words"]),
+            "bbox":  (x0 / zoom, y0 / zoom, x1 / zoom, y1 / zoom),
+            "text":  r["text"],
             "size":  max(_MIN_FONT_SIZE, height_pt * 0.8),
             "color": 0,
             "font":  "",
@@ -181,7 +148,7 @@ class PdfTranslatorEngine:
         except Exception as exc:
             return PdfResult(output=output_path, success=False, error=str(exc))
 
-        ocr_ready = include_scanned and _ocr_available()
+        ocr_ready = include_scanned and ocr_available()
         total = doc.page_count or 1
         pages_done = 0
 
@@ -194,9 +161,9 @@ class PdfTranslatorEngine:
         translate_errors   = 0
         first_error        = ""
         # A scanned page with no digital text needs OCR to recover anything —
-        # if the user asked for it but pytesseract/Tesseract isn't installed,
-        # that page is silently left untouched. Count it so the result can
-        # say so explicitly instead of reporting a fake full-document success.
+        # if the user asked for it but RapidOCR isn't installed, that page
+        # is silently left untouched. Count it so the result can say so
+        # explicitly instead of reporting a fake full-document success.
         ocr_needed_missing = 0
 
         try:
@@ -208,9 +175,9 @@ class PdfTranslatorEngine:
                 if not lines:
                     if ocr_ready:
                         try:
-                            lines = _ocr_lines(page, src)
-                        except RuntimeError:
-                            # OCR timed out on this page — leave it untouched
+                            lines = _ocr_lines(page)
+                        except Exception:
+                            # OCR failed on this page — leave it untouched
                             # rather than aborting the whole document.
                             lines = []
                     elif include_scanned:
@@ -266,9 +233,8 @@ class PdfTranslatorEngine:
                         output=output_path, success=False, page_count=pages_done,
                         error=(f"Il PDF sembra scansionato (nessun testo "
                                f"digitale) e l'OCR non è disponibile: "
-                               f"installa pytesseract (pip install pytesseract) "
-                               f"e Tesseract OCR (per Windows: il pacchetto "
-                               f"UB-Mannheim), poi riprova. "
+                               f"installa il motore OCR "
+                               f"({pip_hint('rapidocr_onnxruntime')}), poi riprova. "
                                f"{ocr_needed_missing} pagina/e coinvolta/e."))
                 if translate_errors > 0:
                     # Every line failed to translate → the output is an
@@ -291,7 +257,8 @@ class PdfTranslatorEngine:
             warning = ""
             if ocr_needed_missing > 0:
                 warning = (f"{ocr_needed_missing} pagina/e scansionata/e ignorata/e: "
-                           f"installa pytesseract + Tesseract OCR per tradurle.")
+                           f"installa il motore OCR per tradurle "
+                           f"({pip_hint('rapidocr_onnxruntime')}).")
             return PdfResult(output=output_path, success=True, cancelled=cancelled,
                               page_count=pages_done, warning=warning,
                               file_size=output_path.stat().st_size)

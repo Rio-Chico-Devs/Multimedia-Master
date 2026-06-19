@@ -12,16 +12,11 @@ from common.crashlog import install as _install_crashlog, run_gui as _run_gui
 from common.paths import crash_log_path
 _install_crashlog(crash_log_path("pdf_manager"))
 
-# Frozen-build hardening: pytesseract spawns tesseract.exe without setting
-# stdin, which hangs forever (not crashes) in a windowed build with no console.
+# Frozen-build hardening: dependencies that shell out (e.g. pydub -> ffmpeg)
+# without setting stdin hang forever (not crash) in a windowed build with no
+# console.
 from common.proc import harden_subprocess_stdin as _harden_stdin
 _harden_stdin()
-
-# Point pytesseract at the bundled Tesseract copy, if the build vendored one
-# (see vendor/tesseract/README.md) — makes OCR/scanned-PDF-translation work
-# on a customer's PC with nothing extra to install. No-op otherwise.
-from common.ocr_bin import configure_tesseract as _configure_tesseract
-_configure_tesseract()
 
 import customtkinter as ctk
 from ui.pdf_window import PdfWindow

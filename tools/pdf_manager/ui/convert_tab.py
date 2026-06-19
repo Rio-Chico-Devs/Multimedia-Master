@@ -2,7 +2,7 @@
 Convert Tab — images → PDF
   • Select multiple images (browse / folder / drag-and-drop)
   • Optional: one PDF per image vs. single merged PDF
-  • Optional: OCR (pytesseract, needs Tesseract installed)
+  • Optional: OCR (RapidOCR, fully bundled — no separate install)
   • Output directory chooser
 """
 from __future__ import annotations
@@ -66,20 +66,9 @@ class ConvertTab(ctk.CTkFrame):
             fill="x", padx=12, pady=(8, 2))
         self._ocr_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(right,
-                        text="Attiva OCR  (richiede Tesseract)",
+                        text="Attiva OCR  (testo ricercabile sopra la scansione)",
                         variable=self._ocr_var).pack(
             anchor="w", padx=16, pady=2)
-
-        # OCR language
-        lang_row = ctk.CTkFrame(right, fg_color="transparent")
-        lang_row.pack(fill="x", padx=16, pady=(4, 0))
-        ctk.CTkLabel(lang_row, text="Lingua OCR:",
-                     font=ctk.CTkFont(size=11), width=80,
-                     anchor="w").pack(side="left")
-        self._lang_entry = ctk.CTkEntry(lang_row, width=120,
-                                         placeholder_text="ita+eng")
-        self._lang_entry.insert(0, "ita+eng")
-        self._lang_entry.pack(side="left", padx=(6, 0))
 
         Separator(right).pack(pady=(8, 0))
 
@@ -166,7 +155,6 @@ class ConvertTab(ctk.CTkFrame):
 
         one_per = self._mode.get() == "per_file"
         ocr     = self._ocr_var.get()
-        lang    = self._lang_entry.get().strip() or "ita+eng"
 
         # Overwrite check applies only to single-file mode.
         if not one_per and output.exists():
@@ -187,11 +175,11 @@ class ConvertTab(ctk.CTkFrame):
 
         threading.Thread(
             target=self._worker,
-            args=(images, output, ocr, one_per, lang),
+            args=(images, output, ocr, one_per),
             daemon=True,
         ).start()
 
-    def _worker(self, images, output, ocr, one_per, lang):
+    def _worker(self, images, output, ocr, one_per):
         try:
             if one_per:
                 # Process each image individually so cancel takes effect between files.
@@ -217,7 +205,6 @@ class ConvertTab(ctk.CTkFrame):
                             output=per_file_output,
                             ocr=ocr,
                             one_per_file=False,
-                            lang=lang,
                         )
                         if results and results[0].success:
                             ok += 1
@@ -245,7 +232,6 @@ class ConvertTab(ctk.CTkFrame):
                     output=output,
                     ocr=ocr,
                     one_per_file=False,
-                    lang=lang,
                 )
                 ok   = [r for r in results if r.success]
                 fail = [r for r in results if not r.success]

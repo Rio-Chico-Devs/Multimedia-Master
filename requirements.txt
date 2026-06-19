@@ -22,9 +22,12 @@ pymupdf>=1.24.13,<2       # pip install pymupdf  (also known as fitz)
 # ── PDF text extraction (optional, better layout than pypdf) ──────────────────
 pdfplumber>=0.10.0,<1
 
-# ── OCR — searchable PDF + scanned-page text for Translate tab (optional, ─────
-#    also needs the Tesseract binary installed) ───────────────────────────────
-# pytesseract>=0.3.10
+# ── OCR — searchable PDF + scanned-page text for Translate tab (optional) ─────
+#    Pure pip, no separate native installer: the base (Chinese+English)
+#    model ships inside the wheel. For accurate Italian/French/German/
+#    Spanish recognition, vendor the "latin" model once at build time
+#    (see vendor/rapidocr/README.md).
+# rapidocr-onnxruntime>=1.3.0,<2
 
 # ── PDF translation — offline neural MT (optional) ────────────────────────────
 # Language packages are downloaded once from the app's "Gestisci lingue"

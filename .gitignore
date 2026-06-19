@@ -8,9 +8,9 @@ __pycache__/
 /dist/
 *.spec.bak
 
-# Vendored native OCR binaries — large, per-build-machine binaries the
-# developer copies in once before packaging (see vendor/tesseract/README.md).
-# Never commit the actual binaries to git.
-/vendor/tesseract/*
-!/vendor/tesseract/README.md
+# Vendored OCR model files — large, per-build-machine files the developer
+# copies in once before packaging (see vendor/rapidocr/README.md).
+# Never commit the actual model files to git.
+/vendor/rapidocr/*
+!/vendor/rapidocr/README.md
 

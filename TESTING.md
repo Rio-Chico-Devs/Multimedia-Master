@@ -7,7 +7,7 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 **Legenda esito:** ✅ ok · ⚠️ funziona con riserve · ❌ rotto · ⏭️ saltato (dip. opzionale assente)
 
 **Dipendenze opzionali** (i test relativi sono ⏭️ se assenti, non ❌):
-`pymupdf` (editor PDF) · `pytesseract` + Tesseract (OCR) · `demucs` + PyTorch (separazione stem) · `tkinterdnd2` (drag & drop) · `argostranslate` (traduzione PDF, + download lingue al primo uso)
+`pymupdf` (editor PDF) · `rapidocr-onnxruntime` (OCR) · `demucs` + PyTorch (separazione stem) · `tkinterdnd2` (drag & drop) · `argostranslate` (traduzione PDF, + download lingue al primo uso)
 
 ---
 
@@ -78,7 +78,7 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | ID | Test | Passi | Risultato atteso | Esito |
 |----|------|-------|------------------|:----:|
 | P9  | Converti immagini→PDF | Aggiungere immagini, generare PDF | PDF multi-pagina creato | ☐ |
-| P10 | OCR | Attivare OCR in conversione | PDF ricercabile (⏭️ se manca pytesseract/Tesseract → messaggio chiaro) | ☐ |
+| P10 | OCR | Attivare OCR in conversione | PDF ricercabile (⏭️ se manca rapidocr-onnxruntime → messaggio chiaro) | ☐ |
 | P11 | Unisci | Aggiungere più PDF, unire | PDF unico nell'ordine scelto | ☐ |
 | P12 | Drag&drop PDF | Trascinare PDF nella scheda Unisci | Aggiunti alla lista | ☐ |
 | P13 | Dividi per range | Es. "1-3,5" | File con le pagine indicate | ☐ |
@@ -95,7 +95,7 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | P19 | Nessuna lingua installata | Prima apertura, nessun pacchetto lingua scaricato | Messaggio "nessuna lingua installata", pulsanti traduzione disabilitati | ☐ |
 | P20 | Scarica coppia lingue | "Gestisci lingue" → Aggiorna elenco → Scarica e installa | Pacchetto scaricato, comparso tra le lingue installate | ☐ |
 | P21 | Traduci PDF testuale | Selezionare PDF con testo digitale, scegliere lingue, Traduci | PDF tradotto con stesso layout, testo sostituito, font ridotto se necessario per restare nel riquadro originale | ☐ |
-| P22 | Traduci PDF scansionato | Selezionare PDF scansionato con OCR attivo | Testo riconosciuto via OCR e sostituito nella stessa posizione (⏭️ se manca pytesseract/Tesseract) | ☐ |
+| P22 | Traduci PDF scansionato | Selezionare PDF scansionato con OCR attivo | Testo riconosciuto via OCR e sostituito nella stessa posizione (⏭️ se manca rapidocr-onnxruntime) | ☐ |
 | P23 | Glossario | Aggiungere un termine con traduzione forzata, tradurre un PDF che lo contiene | Il termine appare tradotto come specificato nel glossario | ☐ |
 | P24 | Annulla traduzione | Avviare la traduzione di un PDF lungo, premere Annulla | Si ferma dopo la pagina corrente; le pagine già tradotte restano tradotte | ☐ |
 | P25 | Pagine senza testo | Tradurre un PDF con pagine puramente grafiche (no testo, OCR disattivato) | Quelle pagine restano invariate, nessun errore | ☐ |

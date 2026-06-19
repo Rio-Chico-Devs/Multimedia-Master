@@ -2,7 +2,7 @@
 PDF Engine — pure business logic, zero UI dependencies.
 
 Every public method returns a result dataclass.
-Optional libraries (pytesseract, pdfplumber) are imported lazily;
+Optional libraries (rapidocr_onnxruntime, pdfplumber) are imported lazily;
 the engine degrades gracefully when they are not available.
 """
 
@@ -48,7 +48,7 @@ class PdfEngine:
 
     Dependencies:
       required : pypdf, reportlab, Pillow
-      optional : pdfplumber (richer text extraction), pytesseract (OCR)
+      optional : pdfplumber (richer text extraction), rapidocr_onnxruntime (OCR)
     """
 
     # ── Images → PDF ──────────────────────────────────────────────────────────
@@ -59,7 +59,6 @@ class PdfEngine:
         output:       Path,
         ocr:          bool = False,
         one_per_file: bool = False,
-        lang:         str  = "ita+eng",
     ) -> list[PdfResult]:
         """Convert image files to PDF(s). Returns one result per output file."""
         if one_per_file:
@@ -67,19 +66,18 @@ class PdfEngine:
             for img in images:
                 out = output.parent / (img.stem + ".pdf")
                 out = self._unique_path(out)
-                results.append(self._img_to_pdf(img, out, ocr, lang))
+                results.append(self._img_to_pdf(img, out, ocr))
             return results
         else:
-            return [self._imgs_to_single_pdf(images, output, ocr, lang)]
+            return [self._imgs_to_single_pdf(images, output, ocr)]
 
-    def _img_to_pdf(self, img: Path, output: Path,
-                    ocr: bool, lang: str) -> PdfResult:
-        return self._ocr_to_pdf([img], output, lang) if ocr \
+    def _img_to_pdf(self, img: Path, output: Path, ocr: bool) -> PdfResult:
+        return self._ocr_to_pdf([img], output) if ocr \
                else self._reportlab_to_pdf([img], output)
 
     def _imgs_to_single_pdf(self, images: list[Path], output: Path,
-                             ocr: bool, lang: str) -> PdfResult:
-        return self._ocr_to_pdf(images, output, lang) if ocr \
+                             ocr: bool) -> PdfResult:
+        return self._ocr_to_pdf(images, output) if ocr \
                else self._reportlab_to_pdf(images, output)
 
     def _reportlab_to_pdf(self, images: list[Path], output: Path) -> PdfResult:
@@ -104,37 +102,48 @@ class PdfEngine:
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))
 
-    def _ocr_to_pdf(self, images: list[Path], output: Path,
-                    lang: str) -> PdfResult:
+    def _ocr_to_pdf(self, images: list[Path], output: Path) -> PdfResult:
         try:
-            import pytesseract
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.utils import ImageReader
             from PIL import Image
-            from pypdf import PdfWriter, PdfReader
 
-            writer = PdfWriter()
-            for img_path in images:
-                with Image.open(img_path) as img:
-                    # timeout: Tesseract può bloccarsi su immagini patologiche —
-                    # 120 s a pagina è ampio per qualsiasi scansione legittima.
-                    pdf_bytes = pytesseract.image_to_pdf_or_hocr(
-                        img, extension="pdf", lang=lang, timeout=120)
-                reader = PdfReader(io.BytesIO(pdf_bytes))
-                for page in reader.pages:
-                    writer.add_page(page)
+            from common.ocr_engine import ocr_available, ocr_image
 
-            with open(output, "wb") as f:
-                writer.write(f)
-            return self._ok(output)
-        except ImportError:
-            return PdfResult(
-                output=output, success=False,
-                error="OCR non disponibile: installa pytesseract e Tesseract OCR.")
-        except RuntimeError as exc:
-            if "timeout" in str(exc).lower():
+            if not ocr_available():
                 return PdfResult(
                     output=output, success=False,
-                    error="OCR interrotto: timeout (120 s) superato su un'immagine.")
-            return PdfResult(output=output, success=False, error=str(exc))
+                    error="OCR non disponibile: il motore OCR non è installato.")
+
+            c = canvas.Canvas(str(output))
+            for img_path in images:
+                with Image.open(img_path) as img:
+                    img_rgb = img.convert("RGB")
+                    w, h = img_rgb.size
+                    c.setPageSize((w, h))
+
+                    buf = io.BytesIO()
+                    img_rgb.save(buf, format="JPEG", quality=92)
+                    buf.seek(0)
+                    c.drawImage(ImageReader(buf), 0, 0, w, h)
+
+                    for r in ocr_image(img_rgb):
+                        text = r["text"]
+                        if not text:
+                            continue
+                        x0, y0, x1, y1 = r["bbox"]
+                        font_size = max(4.0, (y1 - y0) * 0.8)
+                        # Render mode 3 = invisible (neither filled nor
+                        # stroked) but still selectable/searchable text,
+                        # laid directly over the original scanned image.
+                        t = c.beginText(x0, h - y1)
+                        t.setTextRenderMode(3)
+                        t.setFont("Helvetica", font_size)
+                        t.textOut(text)
+                        c.drawText(t)
+                c.showPage()
+            c.save()
+            return self._ok(output)
         except Exception as exc:
             return PdfResult(output=output, success=False, error=str(exc))
 

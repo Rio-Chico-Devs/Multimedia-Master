@@ -28,11 +28,10 @@ def harden_subprocess_stdin() -> None:
 
     Only matters in a frozen --windowed build: there is no console, so the
     process's stdin handle is invalid. Dependencies that shell out without
-    passing stdin= explicitly (pydub's AudioSegment.from_file -> ffmpeg,
-    pytesseract -> tesseract.exe) inherit that broken handle and the child
-    hangs forever waiting on it — no exception is ever raised, so nothing
-    reaches crashlog; the UI just looks stuck. Call once at startup, before
-    any such dependency is used.
+    passing stdin= explicitly (pydub's AudioSegment.from_file -> ffmpeg)
+    inherit that broken handle and the child hangs forever waiting on it —
+    no exception is ever raised, so nothing reaches crashlog; the UI just
+    looks stuck. Call once at startup, before any such dependency is used.
     """
     if not getattr(sys, "frozen", False):
         return
