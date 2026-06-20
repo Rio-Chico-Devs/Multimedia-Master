@@ -127,18 +127,50 @@ def _ocr_lines(page):
     return lines
 
 
+def _join_lines(texts: list[str]) -> str:
+    """Join wrapped lines back into running text. A trailing hyphen marks a
+    word split across the line break ("attach-" + "ments" -> "attachments"),
+    so we drop it and glue without a space; otherwise lines join with a space.
+    Feeding the MT model whole words instead of hyphenated fragments is a big
+    part of getting a real translation instead of leftover source text."""
+    out = ""
+    for t in texts:
+        t = t.strip()
+        if not t:
+            continue
+        if not out:
+            out = t
+        elif out.endswith("-") and not out.endswith(" -"):
+            out = out[:-1] + t
+        else:
+            out = out + " " + t
+    return out
+
+
 def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
     """
     Merge consecutive lines that visually belong to the same paragraph
-    (small vertical gap, same left edge) into one chunk, so the MT model
-    sees a full sentence/paragraph instead of an isolated wrapped fragment.
-    Each resulting paragraph keeps every original line's rect for precise
-    redaction, plus their union for re-inserting the translated text.
+    (small vertical gap, similar left edge, similar font size) into one
+    chunk, so the MT model sees a full sentence/paragraph instead of an
+    isolated wrapped fragment. Each resulting paragraph keeps every original
+    line's rect for precise redaction, plus their union for re-inserting the
+    translated text.
+
+    The font-size check matters: without it a big heading ("PREPARATION")
+    glued to the body line under it would both poison the translation and
+    break the paragraph chain, leaving the rest of the body as orphaned
+    fragments — which is exactly how scanned pages ended up half-translated.
     """
     if not lines:
         return []
 
     ordered = sorted(lines, key=lambda li: (li["bbox"][1], li["bbox"][0]))
+
+    # A page-wide reference height is far more stable than any single line's
+    # box (OCR boxes in particular vary a lot), so thresholds below scale to
+    # the document's typical line size rather than a possibly-outlier line.
+    heights = sorted(max(li["bbox"][3] - li["bbox"][1], 1.0) for li in ordered)
+    ref_h = heights[len(heights) // 2]
 
     groups: list[list[dict]] = []
     for li in ordered:
@@ -146,10 +178,12 @@ def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
         if groups:
             prev = groups[-1][-1]
             px0, py0, px1, py1 = prev["bbox"]
-            prev_height = max(py1 - py0, 1.0)
-            vgap    = y0 - py1
-            x_shift = abs(x0 - px0)
-            if vgap < 0.6 * prev_height and x_shift < 2.5 * prev_height:
+            vgap        = y0 - py1
+            x_shift     = abs(x0 - px0)
+            prev_size   = max(prev["size"], 0.1)
+            size_ratio  = li["size"] / prev_size
+            same_size   = 0.75 <= size_ratio <= 1.33
+            if (vgap < 0.8 * ref_h and x_shift < 3.0 * ref_h and same_size):
                 groups[-1].append(li)
                 continue
         groups.append([li])
@@ -164,7 +198,7 @@ def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
         paragraphs.append({
             "line_rects": [g["bbox"] for g in group],
             "bbox":       (x0, y0, x1, y1),
-            "text":       " ".join(g["text"] for g in group),
+            "text":       _join_lines([g["text"] for g in group]),
             "size":       dominant["size"],
             "color":      dominant["color"],
             "font":       dominant["font"],

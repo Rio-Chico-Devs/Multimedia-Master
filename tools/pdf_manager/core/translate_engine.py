@@ -8,6 +8,17 @@ word order. It is not a large general-purpose LLM, so domain nuance is more
 limited — the glossary mechanism below is the offline-friendly way to pin down
 sector-specific terminology the model would otherwise translate inconsistently.
 
+Source cleanup (why it matters so much here):
+  A small NMT model is only as good as the text it's fed. Scanned/OCR'd pages
+  routinely glue words together ("POWER UNITS" -> "POWERUNITS") and PDFs break
+  words across lines with hyphens ("attach-ments"). Feeding those straight to
+  the model produces exactly the garbage the user sees ("POTENZAUNITI", half a
+  sentence left untranslated). _preprocess_source() cleans the text first —
+  collapsing whitespace and, for English source, splitting glued words back
+  apart with the optional `wordninja` package (MIT-licensed, offline, ships its
+  own word-frequency dictionary). All of this is best-effort: if wordninja
+  isn't installed the text is passed through unchanged, never crashing.
+
 Glossary technique (term protection):
   Each glossary term is replaced by a unique placeholder token *before*
   translation, then the token is swapped for the desired translation
@@ -84,6 +95,64 @@ def install_pair(src: str, tgt: str) -> None:
     ap.install_from_path(pkg.download())
 
 
+_wordninja = None
+_wordninja_tried = False
+_WORD_RE = re.compile(r"[A-Za-z]{8,}")
+
+
+def _get_wordninja():
+    """Lazily import the optional `wordninja` splitter. Returns None if it
+    isn't installed — de-gluing then becomes a no-op, never an error."""
+    global _wordninja, _wordninja_tried
+    if not _wordninja_tried:
+        _wordninja_tried = True
+        try:
+            import wordninja
+            _wordninja = wordninja
+        except Exception:
+            _wordninja = None
+    return _wordninja
+
+
+def _split_glued_word(token: str) -> str:
+    """Best-effort split of an OCR-glued English token ('POWERUNITS' ->
+    'POWER UNITS').
+
+    Conservative on purpose: a genuine single word (even a long one) splits
+    to itself, so we only break a token when wordninja finds >= 2 pieces that
+    are each themselves whole words. Anything we're unsure about is returned
+    untouched, so real technical terms and part numbers survive intact.
+    """
+    wn = _get_wordninja()
+    if wn is None:
+        return token
+    try:
+        parts = wn.split(token)
+    except Exception:
+        return token
+    if len(parts) < 2 or any(len(p) < 2 for p in parts):
+        return token
+    # Each piece must be "atomic" to wordninja (re-splitting leaves it whole),
+    # otherwise we'd be shattering an unknown word into letter soup.
+    for p in parts:
+        try:
+            if wn.split(p) != [p]:
+                return token
+        except Exception:
+            return token
+    return " ".join(parts)
+
+
+def _preprocess_source(text: str, src: str) -> str:
+    """Clean OCR/PDF artefacts out of the source text before it reaches the
+    MT model. Whitespace is always normalised; glued-word splitting only runs
+    for English source (wordninja is English-only)."""
+    text = re.sub(r"\s+", " ", text).strip()
+    if src == "en":
+        text = _WORD_RE.sub(lambda m: _split_glued_word(m.group(0)), text)
+    return text
+
+
 def _protect_glossary(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
     tokens: dict[str, str] = {}
     protected = text
@@ -106,6 +175,8 @@ def translate_text(text: str, src: str, tgt: str,
 
     if not text.strip():
         return text
+
+    text = _preprocess_source(text, src)
 
     if glossary:
         protected, tokens = _protect_glossary(text, glossary)

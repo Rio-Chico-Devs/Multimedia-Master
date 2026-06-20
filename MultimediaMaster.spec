@@ -64,6 +64,7 @@ _THIRD_PARTY = [
     "argostranslate",
     "ctranslate2",
     "sentencepiece",
+    "wordninja",
     "rapidocr_onnxruntime",
     "onnxruntime",
     "cv2",

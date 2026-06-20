@@ -33,6 +33,12 @@ pdfplumber>=0.10.0,<1
 # Language packages are downloaded once from the app's "Gestisci lingue"
 # dialog (needs internet that one time); translation itself never goes online.
 # argostranslate>=1.9.0,<2
+#
+# Cleans OCR-glued words ("POWERUNITS" -> "POWER UNITS") before translation so
+# the small MT model isn't fed garbage. MIT-licensed, fully offline (ships its
+# own word list), graceful no-op if absent. Strongly recommended for scanned
+# PDFs.
+# wordninja>=2.0.0,<3
 
 # ── Audio Manager ─────────────────────────────────────────────────────────────
 pydub>=0.25.1,<1           # audio manipulation
