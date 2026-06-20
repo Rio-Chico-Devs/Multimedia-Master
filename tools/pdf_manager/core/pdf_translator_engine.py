@@ -7,14 +7,17 @@ Pipeline per page:
      text dict. If a page has no extractable text (a scanned page), fall
      back to OCR (RapidOCR, see common/ocr_engine.py) to recover line text
      + position instead.
-  2. Translate every line (offline, see translate_engine.py).
+  2. Group lines into paragraphs (see _group_into_paragraphs) and translate
+     each paragraph as one chunk — translating single wrapped lines in
+     isolation starves the MT model of sentence context and reads like
+     literal word substitution instead of a real translation.
   3. Redact the original line rectangles (pymupdf "burns" them out — works
      for both vector text and the rendered scan underneath).
-  4. Re-insert the translated text in the same rectangle, auto-shrinking the
-     font size until it fits — translated text is rarely the exact same
-     length as the source, and the whole point of this tool is that the
-     document keeps looking like the original, not like a translation
-     bolted on top of it.
+  4. Re-insert the translated paragraph text in the union of its lines'
+     rectangles, auto-shrinking the font size until it fits — translated
+     text is rarely the exact same length as the source, and the whole
+     point of this tool is that the document keeps looking like the
+     original, not like a translation bolted on top of it.
 
 Pages with no text at all (pure images, diagrams) are left untouched.
 """
@@ -124,6 +127,51 @@ def _ocr_lines(page):
     return lines
 
 
+def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
+    """
+    Merge consecutive lines that visually belong to the same paragraph
+    (small vertical gap, same left edge) into one chunk, so the MT model
+    sees a full sentence/paragraph instead of an isolated wrapped fragment.
+    Each resulting paragraph keeps every original line's rect for precise
+    redaction, plus their union for re-inserting the translated text.
+    """
+    if not lines:
+        return []
+
+    ordered = sorted(lines, key=lambda li: (li["bbox"][1], li["bbox"][0]))
+
+    groups: list[list[dict]] = []
+    for li in ordered:
+        x0, y0, x1, y1 = li["bbox"]
+        if groups:
+            prev = groups[-1][-1]
+            px0, py0, px1, py1 = prev["bbox"]
+            prev_height = max(py1 - py0, 1.0)
+            vgap    = y0 - py1
+            x_shift = abs(x0 - px0)
+            if vgap < 0.6 * prev_height and x_shift < 2.5 * prev_height:
+                groups[-1].append(li)
+                continue
+        groups.append([li])
+
+    paragraphs = []
+    for group in groups:
+        x0 = min(g["bbox"][0] for g in group)
+        y0 = min(g["bbox"][1] for g in group)
+        x1 = max(g["bbox"][2] for g in group)
+        y1 = max(g["bbox"][3] for g in group)
+        dominant = max(group, key=lambda g: len(g["text"]))
+        paragraphs.append({
+            "line_rects": [g["bbox"] for g in group],
+            "bbox":       (x0, y0, x1, y1),
+            "text":       " ".join(g["text"] for g in group),
+            "size":       dominant["size"],
+            "color":      dominant["color"],
+            "font":       dominant["font"],
+        })
+    return paragraphs
+
+
 class PdfTranslatorEngine:
     """Translates a PDF's text in place, preserving the original layout."""
 
@@ -185,15 +233,16 @@ class PdfTranslatorEngine:
                         ocr_needed_missing += 1
 
                 if lines:
-                    for li in lines:
-                        # A single line that the MT engine chokes on must
-                        # not throw away every other page already done —
-                        # fall back to leaving that one line untranslated.
+                    paragraphs = _group_into_paragraphs(lines)
+                    for p in paragraphs:
+                        # A single paragraph that the MT engine chokes on
+                        # must not throw away every other page already
+                        # done — fall back to leaving it untranslated.
                         try:
-                            li["translated"] = translate_text(li["text"], src, tgt, glossary)
+                            p["translated"] = translate_text(p["text"], src, tgt, glossary)
                             translated_ok += 1
                         except Exception as exc:
-                            li["translated"] = li["text"]
+                            p["translated"] = p["text"]
                             translate_errors += 1
                             if not first_error:
                                 first_error = str(exc)
@@ -208,8 +257,8 @@ class PdfTranslatorEngine:
                     # so this is a no-op for the common case.
                     derot = page.derotation_matrix
                     rot   = page.rotation
-                    for li in lines:
-                        li["rect"] = fitz.Rect(li["bbox"]) * derot
+                    for p in paragraphs:
+                        p["rect"] = fitz.Rect(p["bbox"]) * derot
 
                     # apply_redactions() unconditionally drops every link
                     # overlapping a redacted rect (pymupdf docs/wiki) — a
@@ -218,8 +267,13 @@ class PdfTranslatorEngine:
                     # PDF would silently lose all its links. Capture and
                     # recreate them across the redaction.
                     links = page.get_links()
-                    for li in lines:
-                        page.add_redact_annot(li["rect"], fill=(1, 1, 1))
+                    for p in paragraphs:
+                        # Redact every original line individually (precise,
+                        # matches exactly where the source text was) even
+                        # though the translation gets re-inserted into their
+                        # combined rect below.
+                        for rect in p["line_rects"]:
+                            page.add_redact_annot(fitz.Rect(rect) * derot, fill=(1, 1, 1))
                     page.apply_redactions()
                     for link in links:
                         # The xref refers to the link object apply_redactions()
@@ -227,11 +281,11 @@ class PdfTranslatorEngine:
                         # object, not be pointed at the dead one.
                         link.pop("xref", None)
                         page.insert_link(link)
-                    for li in lines:
+                    for p in paragraphs:
                         _insert_autoshrink(
-                            page, li["rect"], li["translated"],
-                            base_size=li["size"], color=_int_to_rgb(li["color"]),
-                            fontname=_pick_font(li["font"]), rotate=rot)
+                            page, p["rect"], p["translated"],
+                            base_size=p["size"], color=_int_to_rgb(p["color"]),
+                            fontname=_pick_font(p["font"]), rotate=rot)
 
                 pages_done = i + 1
                 if progress_cb:
