@@ -97,7 +97,13 @@ def install_pair(src: str, tgt: str) -> None:
 
 _wordninja = None
 _wordninja_tried = False
-_WORD_RE = re.compile(r"[A-Za-z]{8,}")
+# 6+ letters: long enough that a glued run is plausible, short enough to still
+# catch things like "Afront" ("A front"). Real words this length survive
+# untouched because wordninja keeps a known word whole (see _split_glued_word).
+_WORD_RE = re.compile(r"[A-Za-z]{6,}")
+# "a" and "i" are the only real one-letter English words; allow them as split
+# pieces but treat any other lone letter as a sign we over-split.
+_OK_SINGLE_LETTERS = frozenset({"a", "i"})
 
 
 def _get_wordninja():
@@ -122,6 +128,11 @@ def _split_glued_word(token: str) -> str:
     to itself, so we only break a token when wordninja finds >= 2 pieces that
     are each themselves whole words. Anything we're unsure about is returned
     untouched, so real technical terms and part numbers survive intact.
+
+    Lone letters other than "a"/"i" are rejected — those signal that we
+    shattered a word we shouldn't have (e.g. a part code), whereas the common
+    real glue cases ("Apusherhasthe..." -> "A pusher has the...",
+    "201isatractor" -> "is a tractor") legitimately contain "a" and "i".
     """
     wn = _get_wordninja()
     if wn is None:
@@ -130,8 +141,11 @@ def _split_glued_word(token: str) -> str:
         parts = wn.split(token)
     except Exception:
         return token
-    if len(parts) < 2 or any(len(p) < 2 for p in parts):
+    if len(parts) < 2:
         return token
+    for p in parts:
+        if len(p) == 1 and p.lower() not in _OK_SINGLE_LETTERS:
+            return token
     # Each piece must be "atomic" to wordninja (re-splitting leaves it whole),
     # otherwise we'd be shattering an unknown word into letter soup.
     for p in parts:

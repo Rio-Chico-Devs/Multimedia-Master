@@ -181,6 +181,12 @@ def check_translation_cleanup() -> None:
             out = _split_glued_word("POWERUNITS")
             _record("PASS" if out == "POWER UNITS" else "FAIL",
                     "word de-gluing", f"POWERUNITS -> {out}")
+            # glued run that contains the lone real words "a"/"i" — used to be
+            # rejected by the old >=2-chars-per-piece rule
+            out2 = _split_glued_word("Apusherhasthepower")
+            ok2 = len(out2.split()) >= 4 and out2.lower().split()[0] == "a"
+            _record("PASS" if ok2 else "FAIL",
+                    "word de-gluing (a/i)", f"Apusherhasthepower -> {out2}")
     except Exception as exc:
         _record("FAIL", "word de-gluing", str(exc))
 
