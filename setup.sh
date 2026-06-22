@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Create a local virtual environment (.venv) and install everything needed to
+# Create a local virtual environment (venv) and install everything needed to
 # run Multimedia Master from source on Linux/macOS. (Windows builds use
 # setup.bat + build.bat.) Re-run whenever requirements change.
 # ---------------------------------------------------------------------------
@@ -9,13 +9,13 @@ cd "$(dirname "$0")"
 
 PY="${PYTHON:-python3}"
 
-if [ ! -d .venv ]; then
-    echo "Creating virtual environment in .venv ..."
-    "$PY" -m venv .venv
+if [ ! -d venv ]; then
+    echo "Creating virtual environment in venv ..."
+    "$PY" -m venv venv
 fi
 
 # shellcheck disable=SC1091
-source .venv/bin/activate
+source venv/bin/activate
 
 echo "Upgrading pip ..."
 python -m pip install --upgrade pip
@@ -29,5 +29,5 @@ if ! pip install -r requirements-optional.txt; then
 fi
 
 echo
-echo "Done. Activate with:  source .venv/bin/activate"
+echo "Done. Activate with:  source venv/bin/activate"
 echo "Run from source with: python launcher.py"

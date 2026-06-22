@@ -1,10 +1,10 @@
 @echo off
 REM Build Multimedia Master into a standalone Windows exe (onedir build).
-REM Run this from the project root. If a .venv exists (created by setup.bat)
+REM Run this from the project root. If a venv exists (created by setup.bat)
 REM it is activated automatically; otherwise the current Python environment is
 REM used and must already have every package from requirements.txt installed.
 
-if exist .venv\Scripts\activate.bat call .venv\Scripts\activate.bat
+if exist venv\Scripts\activate.bat call venv\Scripts\activate.bat
 
 pip show pyinstaller >nul 2>nul
 if errorlevel 1 (

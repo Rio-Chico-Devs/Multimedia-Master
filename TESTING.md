@@ -9,7 +9,7 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 **Dipendenze opzionali** (i test relativi sono ⏭️ se assenti, non ❌):
 `pymupdf` (editor PDF) · `rapidocr-onnxruntime` (OCR) · `demucs` + PyTorch (separazione stem) · `tkinterdnd2` (drag & drop) · `argostranslate` (traduzione PDF, + download lingue al primo uso) · `wordninja` (de-incollaggio parole OCR prima della traduzione)
 
-**Setup ambiente:** eseguire `setup.bat` (Windows) una volta — crea `.venv` e installa tutto (core + opzionali + PyInstaller). Poi `build.bat` attiva il venv da solo.
+**Setup ambiente:** eseguire `setup.bat` (Windows) una volta — crea `venv` e installa tutto (core + opzionali + PyInstaller). Poi `build.bat` attiva il venv da solo.
 
 ---
 
@@ -17,8 +17,8 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 
 | ID | Test | Passi | Risultato atteso | Esito |
 |----|------|-------|------------------|:----:|
-| B0 | Setup ambiente | Eseguire `setup.bat` una volta | Crea `.venv` e installa requirements core + opzionali + PyInstaller, nessun errore | ☐ |
-| B1 | Build exe | Eseguire `build.bat` (attiva `.venv` da solo se presente) | Nessun errore; creato `dist\MultimediaMaster\MultimediaMaster.exe` | ☐ |
+| B0 | Setup ambiente | Eseguire `setup.bat` una volta | Crea `venv` e installa requirements core + opzionali + PyInstaller, nessun errore | ☐ |
+| B1 | Build exe | Eseguire `build.bat` (attiva `venv` da solo se presente) | Nessun errore; creato `dist\MultimediaMaster\MultimediaMaster.exe` | ☐ |
 | B2 | Avvio launcher | Doppio click sull'exe | Si apre la finestra launcher con 3 card | ☐ |
 | B3 | Nessuna console | Avvio dell'exe | NON deve apparire nessuna finestra console nera | ☐ |
 | B4 | Avvio tool da exe | Click su ogni card | Ogni tool si apre come finestra separata | ☐ |
