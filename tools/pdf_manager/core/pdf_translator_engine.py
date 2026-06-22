@@ -83,7 +83,12 @@ def _insert_autoshrink(page, rect, text: str, base_size: float,
 
 def _digital_text_lines(page) -> list[dict]:
     lines = []
-    for block in page.get_text("dict")["blocks"]:
+    # pymupdf already segments the page into the author's own text blocks
+    # (paragraphs/regions). We keep each line's block index so the paragraph
+    # grouping below can refuse to merge lines that the document itself put in
+    # different blocks — that boundary is a far stronger "this is a separate
+    # section" signal than any geometric guess.
+    for bidx, block in enumerate(page.get_text("dict")["blocks"]):
         if block["type"] != 0:
             continue
         for line in block["lines"]:
@@ -101,6 +106,7 @@ def _digital_text_lines(page) -> list[dict]:
                 "size":  dominant["size"],
                 "color": dominant["color"],
                 "font":  dominant["font"],
+                "block": bidx,
             })
     return lines
 
@@ -123,6 +129,9 @@ def _ocr_lines(page):
             "size":  max(_MIN_FONT_SIZE, height_pt * 0.8),
             "color": 0,
             "font":  "",
+            # OCR has no block structure to lean on, so the geometric grouping
+            # heuristic is left fully in charge (None never blocks a merge).
+            "block": None,
         })
     return lines
 
@@ -164,7 +173,15 @@ def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
     if not lines:
         return []
 
-    ordered = sorted(lines, key=lambda li: (li["bbox"][1], li["bbox"][0]))
+    # Read each block's lines top-to-bottom as a contiguous run. Without the
+    # block as the primary sort key, two side-by-side blocks (e.g. columns)
+    # would interleave by y and the grouping — which only ever merges
+    # consecutive lines — could never rebuild either section. OCR lines all
+    # carry block=None, so they fall back to pure geometric (y, x) ordering.
+    ordered = sorted(
+        lines,
+        key=lambda li: (li["bbox"][1], li["bbox"][0]) if li.get("block") is None
+        else (li["block"], li["bbox"][1], li["bbox"][0]))
 
     # A page-wide reference height is far more stable than any single line's
     # box (OCR boxes in particular vary a lot), so thresholds below scale to
@@ -183,7 +200,14 @@ def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
             prev_size   = max(prev["size"], 0.1)
             size_ratio  = li["size"] / prev_size
             same_size   = 0.75 <= size_ratio <= 1.33
-            if (vgap < 0.8 * ref_h and x_shift < 3.0 * ref_h and same_size):
+            # Honour the document's own block boundaries: two lines the PDF put
+            # in different blocks are different sections, so never fuse them
+            # even if they happen to sit close together (e.g. a caption right
+            # under a paragraph). OCR lines carry block=None and skip this gate.
+            pb, cb      = prev.get("block"), li.get("block")
+            same_block  = pb is None or cb is None or pb == cb
+            if (same_block and vgap < 0.8 * ref_h
+                    and x_shift < 3.0 * ref_h and same_size):
                 groups[-1].append(li)
                 continue
         groups.append([li])

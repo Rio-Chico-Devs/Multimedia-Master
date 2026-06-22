@@ -173,6 +173,28 @@ def check_translation_cleanup() -> None:
     except Exception as exc:
         _record("FAIL", "de-hyphenation", str(exc))
 
+    # Section grouping must rebuild a body paragraph from its wrapped lines yet
+    # refuse to fuse a separate block (caption) sitting right under it.
+    try:
+        from core.pdf_translator_engine import _group_into_paragraphs
+        lines = [
+            {"bbox": (50, 100, 300, 110), "text": "The power take-off lets the",
+             "size": 10, "color": 0, "font": "", "block": 0},
+            {"bbox": (50, 111, 300, 121), "text": "operator drive an implement.",
+             "size": 10, "color": 0, "font": "", "block": 0},
+            {"bbox": (50, 123, 300, 133), "text": "Fig. 2 — the rear hitch.",
+             "size": 10, "color": 0, "font": "", "block": 1},
+        ]
+        paras = _group_into_paragraphs(lines)
+        ok = (len(paras) == 2
+              and paras[0]["text"] == "The power take-off lets the "
+                                      "operator drive an implement."
+              and paras[1]["text"].startswith("Fig. 2"))
+        _record("PASS" if ok else "FAIL", "block-aware grouping",
+                f"{len(paras)} sezioni")
+    except Exception as exc:
+        _record("FAIL", "block-aware grouping", str(exc))
+
     try:
         from core.translate_engine import _split_glued_word, _get_wordninja
         if _get_wordninja() is None:
