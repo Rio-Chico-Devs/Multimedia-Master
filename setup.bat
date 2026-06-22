@@ -46,8 +46,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo Installing PyInstaller (needed to build the .exe) ...
-pip install pyinstaller
+echo Installing build tools (PyInstaller + pip-audit security scanner) ...
+pip install pyinstaller pip-audit
 
 echo.
 echo ===========================================================================

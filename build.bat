@@ -12,6 +12,23 @@ if errorlevel 1 (
     pip install pyinstaller
 )
 
+REM Dependency vulnerability scan (advisory, never blocks the build). Flags any
+REM dependency with a known CVE so we can bump it in requirements*.txt before
+REM shipping the exe. Skipped silently if pip-audit isn't installed.
+pip show pip-audit >nul 2>nul
+if not errorlevel 1 (
+    echo.
+    echo Running pip-audit on requirements ...
+    pip-audit -r requirements.txt -r requirements-optional.txt
+    if errorlevel 1 (
+        echo.
+        echo WARNING: pip-audit reported known vulnerabilities above. Consider
+        echo          bumping the affected packages in requirements*.txt before
+        echo          distributing this build.
+        echo.
+    )
+)
+
 rmdir /s /q build 2>nul
 rmdir /s /q dist 2>nul
 

@@ -28,6 +28,9 @@ if ! pip install -r requirements-optional.txt; then
     echo "WARNING: optional deps failed; OCR/translation may be disabled."
 fi
 
+echo "Installing pip-audit (dependency vulnerability scanner) ..."
+pip install pip-audit || echo "WARNING: pip-audit install failed (optional)."
+
 echo
 echo "Done. Activate with:  source venv/bin/activate"
 echo "Run from source with: python launcher.py"

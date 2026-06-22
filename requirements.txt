@@ -5,13 +5,20 @@
 customtkinter>=5.2.0,<6
 
 # ── Image processing ──────────────────────────────────────────────────────────
-Pillow>=10.0.0,<12
+Pillow>=12.2.0,<13        # >=12.2.0: fixes the image-parser CVEs flagged by
+                          # pip-audit (PYSEC-2026-165, CVE-2026-25990/40192/
+                          # 42309/42310/42311) — these are the "malicious image"
+                          # attack surface, keep this current.
 
 # ── Drag & drop (optional, graceful fallback if not installed) ────────────────
 tkinterdnd2>=0.3.0,<1
 
 # ── PDF operations ────────────────────────────────────────────────────────────
-pypdf>=4.0.0,<6           # merge, split, encrypt, form fields
+pypdf>=6.13.3,<7          # merge, split, encrypt, form fields
+                          # >=6.13.3: clears 30+ pypdf CVEs flagged by pip-audit
+                          # (the "malicious PDF" attack surface). NOTE: this is a
+                          # major bump from the old 5.x pin — re-run the PDF tests
+                          # (merge/split/encrypt/forms) in TESTING.md after upgrading.
 reportlab>=4.0.0,<5       # create PDF from images (no OCR path)
 
 # ── PDF visual editor — render pages as images for the Modifica tab ──────────
