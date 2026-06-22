@@ -1,0 +1,20 @@
+# Optional, heavier features — installed by setup.bat / setup.sh.
+# Kept out of requirements.txt so a minimal build (no OCR, no translation)
+# stays light. The app runs without these: each feature degrades gracefully
+# with a "pip install ..." hint instead of crashing.
+
+# ── OCR — searchable PDF + scanned-page text for the Translate tab ────────────
+#    Pure pip, no separate native installer: the base (Chinese+English) model
+#    ships inside the wheel. For accurate Italian/French/German/Spanish
+#    recognition, vendor the "latin" model once (see vendor/rapidocr/README.md).
+rapidocr-onnxruntime>=1.3.0,<2
+
+# ── PDF translation — offline neural MT ───────────────────────────────────────
+#    Language packages are downloaded once from "Gestisci lingue" (needs
+#    internet that one time); translation itself never goes online afterwards.
+argostranslate>=1.9.0,<2
+
+# ── Translation source cleanup ────────────────────────────────────────────────
+#    Splits OCR-glued English words ("POWERUNITS" -> "POWER UNITS") before
+#    translation. MIT-licensed, fully offline, ships its own word list.
+wordninja>=2.0.0,<3

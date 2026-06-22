@@ -3,6 +3,10 @@ __pycache__/
 *.pyo
 *.pyd
 
+# Local virtual environment (created by setup.bat / setup.sh)
+/.venv/
+/venv/
+
 # PyInstaller build output
 /build/
 /dist/
