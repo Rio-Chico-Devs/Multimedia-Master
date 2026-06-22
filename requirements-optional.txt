@@ -12,11 +12,13 @@ rapidocr-onnxruntime>=1.3.0,<2
 # ── PDF translation — offline neural MT ───────────────────────────────────────
 #    Language packages are downloaded once from "Gestisci lingue" (needs
 #    internet that one time); translation itself never goes online afterwards.
-argostranslate>=1.9.0,<2
-#    stanza is pulled in by argostranslate for sentence segmentation; pin the
-#    patched version (CVE-2026-54499, flagged by pip-audit) explicitly so a
-#    fresh install can't resolve back to the vulnerable 1.10.x.
-stanza>=1.12.2,<2
+#    Floor pinned at 1.11: from 1.11 argostranslate uses the lightweight
+#    `minisbd` for sentence segmentation. Older 1.9.x/1.10.x instead pulled in
+#    `stanza` — which (a) drags in torch + huggingface-hub and (b) was flagged
+#    by pip-audit (CVE-2026-54499). Keeping the floor at 1.11 holds the resolver
+#    on the lean, stanza-free engine. Do NOT lower it. If a stray `stanza` is
+#    still installed from an older build, remove it: pip uninstall -y stanza
+argostranslate>=1.11.0,<2
 
 # ── Translation source cleanup ────────────────────────────────────────────────
 #    Splits OCR-glued English words ("POWERUNITS" -> "POWER UNITS") before
