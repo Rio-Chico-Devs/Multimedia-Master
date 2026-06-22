@@ -18,6 +18,8 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | ID | Test | Passi | Risultato atteso | Esito |
 |----|------|-------|------------------|:----:|
 | B0 | Setup ambiente | Eseguire `setup.bat` una volta | Crea `venv` e installa requirements core + opzionali + PyInstaller, nessun errore | ☐ |
+| B0b | Smoke test | `python smoke_test.py` (nel venv) | `RESULT: OK` — verifica versioni di sicurezza (Pillow/pypdf), import, i percorsi pypdf (merge/split/cifra/decifra) e la pulizia testo traduzione | ☐ |
+| B0c | Audit dipendenze | `pip-audit -r requirements.txt -r requirements-optional.txt` | Solo `stanza` (CVE-2026-54499, rischio residuo documentato e non raggiungibile); tutto il resto pulito | ☐ |
 | B1 | Build exe | Eseguire `build.bat` (attiva `venv` da solo se presente) | Nessun errore; creato `dist\MultimediaMaster\MultimediaMaster.exe` | ☐ |
 | B2 | Avvio launcher | Doppio click sull'exe | Si apre la finestra launcher con 3 card | ☐ |
 | B3 | Nessuna console | Avvio dell'exe | NON deve apparire nessuna finestra console nera | ☐ |
