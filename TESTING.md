@@ -104,6 +104,10 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | P23 | Glossario | Aggiungere un termine con traduzione forzata, tradurre un PDF che lo contiene | Il termine appare tradotto come specificato nel glossario | ☐ |
 | P24 | Annulla traduzione | Avviare la traduzione di un PDF lungo, premere Annulla | Si ferma dopo la pagina corrente; le pagine già tradotte restano tradotte | ☐ |
 | P25 | Pagine senza testo | Tradurre un PDF con pagine puramente grafiche (no testo, OCR disattivato) | Quelle pagine restano invariate, nessun errore | ☐ |
+| P26 | Revisione manuale — rimozione | Spuntare "Revisione manuale", tradurre, rimuovere (✕) una sezione nella prima finestra di revisione | Nel PDF finale quella sezione resta identica all'originale (non tradotta, non redatta) | ☐ |
+| P27 | Revisione manuale — editing testo estratto | Spuntare "Revisione manuale", correggere il testo di una sezione nella prima finestra prima di continuare | La traduzione successiva usa il testo corretto, non quello estratto originariamente | ☐ |
+| P28 | Revisione manuale — editing traduzione | Spuntare "Revisione manuale", correggere il testo tradotto nella seconda finestra di revisione | Il PDF finale contiene il testo corretto a mano, non quello prodotto dal motore MT | ☐ |
+| P29 | Revisione manuale — annulla a metà | Spuntare "Revisione manuale", premere "Annulla traduzione" in una delle due finestre di revisione | Nessun PDF viene generato, stato torna a pronto | ☐ |
 
 ---
 

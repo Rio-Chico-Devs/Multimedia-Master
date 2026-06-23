@@ -17,7 +17,10 @@ import customtkinter as ctk
 from common.settings import Settings
 from .file_widgets import SingleFilePicker
 from .widgets       import SectionLabel, Separator, StatusBar, adaptive_wraplength
-from core.pdf_translator_engine import PdfTranslatorEngine
+from .translate_review_dialog import SectionReviewDialog
+from core.pdf_translator_engine import (
+    PdfTranslatorEngine, apply_translation, extract_sections, translate_sections,
+)
 from core import translate_engine as te
 from core import mbart_engine as me
 from core.glossary_presets import AGRICULTURAL_EN_IT
@@ -324,6 +327,14 @@ class TranslateTab(ctk.CTkFrame):
         ctk.CTkButton(opts_row, text="Glossario", height=28,
                       command=self._open_glossary_dialog).pack(side="right")
 
+        review_row = ctk.CTkFrame(main, fg_color="transparent")
+        review_row.pack(fill="x", padx=12, pady=(0, 4))
+        self._review_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            review_row, text="Revisione manuale (controlla ed edita le sezioni "
+                              "prima di generare il PDF)",
+            variable=self._review_var).pack(side="left")
+
         # Output directory
         out_frame = ctk.CTkFrame(main, fg_color="transparent")
         out_frame.pack(fill="x", padx=12, pady=(8, 4))
@@ -497,13 +508,21 @@ class TranslateTab(ctk.CTkFrame):
         self._btn_translate.configure(state="disabled")
         self._btn_cancel.configure(state="normal")
         self._progress.set(0)
-        self._status.busy("Traduzione in corso…")
 
-        threading.Thread(
-            target=self._worker,
-            args=(pdf, out_path, src, tgt, self._ocr_var.get(), glossary, self._mt_engine),
-            daemon=True,
-        ).start()
+        include_scanned = self._ocr_var.get()
+        if self._review_var.get():
+            job = dict(pdf=pdf, out_path=out_path, src=src, tgt=tgt,
+                       include_scanned=include_scanned, glossary=glossary,
+                       engine=self._mt_engine)
+            self._status.busy("Estrazione testo in corso…")
+            threading.Thread(target=self._worker_extract, args=(job,), daemon=True).start()
+        else:
+            self._status.busy("Traduzione in corso…")
+            threading.Thread(
+                target=self._worker,
+                args=(pdf, out_path, src, tgt, include_scanned, glossary, self._mt_engine),
+                daemon=True,
+            ).start()
 
     def _worker(self, pdf, out_path, src, tgt, include_scanned, glossary, engine) -> None:
         result = self._engine.translate_pdf(
@@ -516,15 +535,127 @@ class TranslateTab(ctk.CTkFrame):
         )
         self.after(0, self._done, result)
 
+    # ── Manual-review flow (extract -> review -> translate -> review -> apply) ─
+
+    def _worker_extract(self, job: dict) -> None:
+        try:
+            extracted = extract_sections(
+                job["pdf"], include_scanned=job["include_scanned"],
+                cancel_event=self._cancel_event,
+                progress_cb=lambda f: self.after(0, self._progress.set, f))
+        except Exception as exc:
+            self.after(0, self._review_failed, str(exc))
+            return
+        self.after(0, self._show_pre_review, job, extracted)
+
+    def _review_failed(self, error: str) -> None:
+        self._finish_busy()
+        self._status.err(error)
+
+    def _show_pre_review(self, job: dict, extracted) -> None:
+        job["extracted"] = extracted
+        if self._cancel_event.is_set():
+            self._finish_busy()
+            self._status.ok("Annullato.")
+            return
+        if not extracted.sections:
+            self._finish_busy()
+            self._status.err("Nessun testo trovato nel PDF: nessuna pagina "
+                              "conteneva testo da tradurre.")
+            return
+        self._progress.set(0)
+        self._status.ok(f"{len(extracted.sections)} sezioni trovate — "
+                         f"controllale prima di tradurre.")
+        SectionReviewDialog(
+            self, extracted.sections, mode="source",
+            title="Revisione testo estratto",
+            intro="Controlla le sezioni trovate nel PDF. Rimuovi (✕) quelle "
+                  "che non vuoi tradurre o che creano problemi, oppure "
+                  "correggi il testo prima di procedere.",
+            on_done=lambda confirmed: self._pre_review_done(job, confirmed))
+
+    def _pre_review_done(self, job: dict, confirmed: bool) -> None:
+        if not confirmed:
+            self._finish_busy()
+            self._status.ok("Traduzione annullata.")
+            return
+        self._status.busy("Traduzione in corso…")
+        threading.Thread(target=self._worker_translate, args=(job,), daemon=True).start()
+
+    def _worker_translate(self, job: dict) -> None:
+        extracted = job["extracted"]
+        translated_ok, translate_errors, first_error = translate_sections(
+            extracted.sections, job["src"], job["tgt"], job["glossary"],
+            engine=job["engine"], cancel_event=self._cancel_event,
+            progress_cb=lambda f: self.after(0, self._progress.set, f))
+        job["translated_ok"]    = translated_ok
+        job["translate_errors"] = translate_errors
+        job["first_error"]      = first_error
+        self.after(0, self._show_post_review, job)
+
+    def _show_post_review(self, job: dict) -> None:
+        extracted = job["extracted"]
+        if self._cancel_event.is_set():
+            self._finish_busy()
+            self._status.ok("Annullato.")
+            return
+        if job["translated_ok"] == 0:
+            self._finish_busy()
+            if job["translate_errors"] > 0:
+                self._status.err(
+                    f"Nessuna riga è stata tradotta: la coppia di lingue "
+                    f"{job['src']}→{job['tgt']} non risulta utilizzabile. "
+                    f"Apri 'Gestisci lingue' e scarica/reinstalla la coppia. "
+                    f"Dettaglio tecnico: {job['first_error']}")
+            else:
+                self._status.err("Nessuna sezione da tradurre (tutte rimosse?).")
+            return
+        self._progress.set(0)
+        active = [s for s in extracted.sections if not s.get("removed")]
+        SectionReviewDialog(
+            self, active, mode="translation",
+            title="Revisione traduzione",
+            intro="Controlla il risultato. Puoi correggere il testo tradotto "
+                  "o rimuovere (✕) una sezione per lasciarla come "
+                  "nell'originale.",
+            on_done=lambda confirmed: self._post_review_done(job, confirmed))
+
+    def _post_review_done(self, job: dict, confirmed: bool) -> None:
+        if not confirmed:
+            self._finish_busy()
+            self._status.ok("Traduzione annullata.")
+            return
+        self._status.busy("Scrittura del PDF…")
+        threading.Thread(target=self._worker_apply, args=(job,), daemon=True).start()
+
+    def _worker_apply(self, job: dict) -> None:
+        extracted = job["extracted"]
+        result = apply_translation(
+            job["pdf"], job["out_path"], extracted.sections, extracted.page_count,
+            cancel_event=self._cancel_event,
+            progress_cb=lambda f: self.after(0, self._progress.set, f))
+        if result.success and extracted.ocr_needed_missing > 0:
+            from common.depmsg import pip_hint
+            result.warning = (f"{extracted.ocr_needed_missing} pagina/e "
+                               f"scansionata/e ignorata/e: installa il motore "
+                               f"OCR per tradurle "
+                               f"({pip_hint('rapidocr_onnxruntime')}).")
+        self.after(0, self._done, result)
+
+    # ── Shared cancel / done ──────────────────────────────────────────────────
+
     def _cancel(self) -> None:
         self._cancel_event.set()
         self._status.busy("Annullamento…")
 
-    def _done(self, result) -> None:
+    def _finish_busy(self) -> None:
         self._busy = False
         self._btn_cancel.configure(state="disabled")
         state = "normal" if self._picker.get_path() else "disabled"
         self._btn_translate.configure(state=state)
+
+    def _done(self, result) -> None:
+        self._finish_busy()
         if result.cancelled:
             self._status.ok(f"Annullato — {result.page_count} pagine tradotte "
                              f"su {result.output.name}")

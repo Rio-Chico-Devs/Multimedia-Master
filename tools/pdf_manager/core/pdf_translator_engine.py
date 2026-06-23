@@ -2,22 +2,30 @@
 PDF Translator Engine — translates a PDF in place: same layout, same page,
 only the text is replaced.
 
-Pipeline per page:
-  1. Read text lines with their position/size/font via pymupdf's structured
-     text dict. If a page has no extractable text (a scanned page), fall
-     back to OCR (RapidOCR, see common/ocr_engine.py) to recover line text
-     + position instead.
-  2. Group lines into paragraphs (see _group_into_paragraphs) and translate
-     each paragraph as one chunk — translating single wrapped lines in
+Pipeline, exposed as three independent stages so a caller can pause between
+them for manual review (see ui/translate_review_dialog.py) instead of always
+running start-to-finish:
+
+  1. extract_sections() — read text lines with their position/size/font via
+     pymupdf's structured text dict. If a page has no extractable text (a
+     scanned page), fall back to OCR (RapidOCR, see common/ocr_engine.py) to
+     recover line text + position instead. Lines are grouped into paragraphs
+     (see _group_into_paragraphs) — translating single wrapped lines in
      isolation starves the MT model of sentence context and reads like
      literal word substitution instead of a real translation.
-  3. Redact the original line rectangles (pymupdf "burns" them out — works
-     for both vector text and the rendered scan underneath).
-  4. Re-insert the translated paragraph text in the union of its lines'
-     rectangles, auto-shrinking the font size until it fits — translated
-     text is rarely the exact same length as the source, and the whole
-     point of this tool is that the document keeps looking like the
-     original, not like a translation bolted on top of it.
+  2. translate_sections() — translate each paragraph's text as one chunk.
+     A caller may edit/remove paragraphs (drop unwanted ones, fix garbled
+     OCR text) between stage 1 and this one.
+  3. apply_translation() — redact the original line rectangles (pymupdf
+     "burns" them out — works for both vector text and the rendered scan
+     underneath) and re-insert the translated paragraph text in the union of
+     its lines' rectangles, auto-shrinking the font size until it fits.
+     Sections marked "removed" are skipped entirely: the original PDF
+     content there is left untouched. A caller may edit the translated text
+     between stage 2 and this one.
+
+translate_pdf() composes the three stages for the common case of a single,
+uninterrupted run with no manual review.
 
 Pages with no text at all (pure images, diagrams) are left untouched.
 """
@@ -44,6 +52,13 @@ class PdfResult:
     file_size:  int = 0
     error:      str = ""
     warning:    str = ""
+
+
+@dataclass
+class ExtractResult:
+    sections:            list[dict]
+    page_count:          int
+    ocr_needed_missing:  int = 0
 
 
 def _int_to_rgb(color: int) -> tuple[float, float, float]:
@@ -226,8 +241,187 @@ def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
             "size":       dominant["size"],
             "color":      dominant["color"],
             "font":       dominant["font"],
+            "removed":    False,
         })
     return paragraphs
+
+
+def extract_sections(
+    input_path:       Path,
+    include_scanned:  bool = True,
+    cancel_event=None,
+    progress_cb:      Callable[[float], None] | None = None,
+) -> ExtractResult:
+    """Read every page's paragraphs without modifying the PDF. Each returned
+    section is a dict (see _group_into_paragraphs) plus a "page" index and a
+    "removed" flag a caller can flip before translate_sections()/
+    apply_translation() to drop a section instead of translating/burning it
+    in — the original PDF content there is left exactly as-is."""
+    import fitz  # pymupdf
+
+    doc = fitz.open(str(input_path))
+    try:
+        ocr_ready  = include_scanned and ocr_available()
+        total      = doc.page_count or 1
+        sections: list[dict] = []
+        ocr_needed_missing = 0
+
+        for i, page in enumerate(doc):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+
+            lines = _digital_text_lines(page)
+            if not lines:
+                if ocr_ready:
+                    try:
+                        lines = _ocr_lines(page)
+                    except Exception:
+                        # OCR failed on this page — leave it untouched
+                        # rather than aborting the whole document.
+                        lines = []
+                elif include_scanned:
+                    ocr_needed_missing += 1
+
+            for p in _group_into_paragraphs(lines):
+                p["page"] = i
+                sections.append(p)
+
+            if progress_cb:
+                progress_cb((i + 1) / total)
+
+        return ExtractResult(sections=sections, page_count=doc.page_count,
+                              ocr_needed_missing=ocr_needed_missing)
+    finally:
+        doc.close()
+
+
+def translate_sections(
+    sections:    list[dict],
+    src:         str,
+    tgt:         str,
+    glossary:    dict[str, str] | None = None,
+    engine:      str = "argos",
+    cancel_event=None,
+    progress_cb: Callable[[float], None] | None = None,
+) -> tuple[int, int, str]:
+    """Translate every section's text in place (adds/overwrites the
+    "translated" key). Sections with removed=True are skipped — they carry
+    no translation and apply_translation() will leave that PDF area as-is.
+    Returns (translated_ok, translate_errors, first_error)."""
+    translated_ok    = 0
+    translate_errors = 0
+    first_error      = ""
+    total = len(sections) or 1
+
+    for idx, p in enumerate(sections):
+        if cancel_event is not None and cancel_event.is_set():
+            break
+        if not p.get("removed"):
+            # A single paragraph that the MT engine chokes on must not throw
+            # away every other one already done — fall back to the source.
+            try:
+                p["translated"] = translate_text(p["text"], src, tgt, glossary,
+                                                  engine=engine)
+                translated_ok += 1
+            except Exception as exc:
+                p["translated"] = p["text"]
+                translate_errors += 1
+                if not first_error:
+                    first_error = str(exc)
+        if progress_cb:
+            progress_cb((idx + 1) / total)
+
+    return translated_ok, translate_errors, first_error
+
+
+def apply_translation(
+    input_path:   Path,
+    output_path:  Path,
+    sections:     list[dict],
+    page_count:   int = 0,
+    cancel_event=None,
+    progress_cb:  Callable[[float], None] | None = None,
+) -> PdfResult:
+    """Re-open the original PDF and burn in the (possibly user-edited)
+    translated sections, page by page. Sections marked removed=True are
+    skipped entirely — neither redacted nor replaced."""
+    try:
+        import fitz  # pymupdf
+    except ImportError:
+        return PdfResult(output=output_path, success=False,
+                          error=f"pymupdf non disponibile — {pip_hint('pymupdf')}")
+
+    try:
+        doc = fitz.open(str(input_path))
+    except Exception as exc:
+        return PdfResult(output=output_path, success=False, error=str(exc))
+
+    by_page: dict[int, list[dict]] = {}
+    for p in sections:
+        if not p.get("removed"):
+            by_page.setdefault(p["page"], []).append(p)
+
+    total = (page_count or doc.page_count) or 1
+    pages_done = 0
+    try:
+        for i, page in enumerate(doc):
+            if cancel_event is not None and cancel_event.is_set():
+                break
+
+            paragraphs = by_page.get(i, [])
+            if paragraphs:
+                # Page rotation handling: get_text()/get_pixmap() report boxes
+                # in the *displayed* (rotated) coordinate system, but
+                # add_redact_annot()/insert_textbox() operate in the page's
+                # *unrotated* base system. derotation_matrix is the identity
+                # on an unrotated page, so this is a no-op for the common case.
+                derot = page.derotation_matrix
+                rot   = page.rotation
+                for p in paragraphs:
+                    p["rect"] = fitz.Rect(p["bbox"]) * derot
+
+                # apply_redactions() unconditionally drops every link
+                # overlapping a redacted rect (pymupdf docs/wiki) — a text
+                # line under a hyperlink is the common case (URLs, mailto:,
+                # page jumps), so without this the translated PDF would
+                # silently lose all its links. Capture and recreate them
+                # across the redaction.
+                links = page.get_links()
+                for p in paragraphs:
+                    for rect in p["line_rects"]:
+                        page.add_redact_annot(fitz.Rect(rect) * derot, fill=(1, 1, 1))
+                page.apply_redactions()
+                for link in links:
+                    # The xref refers to the link object apply_redactions()
+                    # just destroyed — insert_link() must create a new
+                    # object, not be pointed at the dead one.
+                    link.pop("xref", None)
+                    page.insert_link(link)
+                for p in paragraphs:
+                    _insert_autoshrink(
+                        page, p["rect"], p.get("translated", p["text"]),
+                        base_size=p["size"], color=_int_to_rgb(p["color"]),
+                        fontname=_pick_font(p["font"]), rotate=rot)
+
+            pages_done = i + 1
+            if progress_cb:
+                progress_cb(pages_done / total)
+
+        cancelled = cancel_event is not None and cancel_event.is_set()
+        doc.save(str(output_path))
+        doc.close()
+        return PdfResult(output=output_path, success=True, cancelled=cancelled,
+                          page_count=pages_done, file_size=output_path.stat().st_size)
+    except Exception as exc:
+        # Best-effort: keep whatever pages were already translated instead
+        # of discarding the whole job on one fatal error.
+        try:
+            doc.save(str(output_path))
+        except Exception:
+            pass
+        doc.close()
+        return PdfResult(output=output_path, success=False,
+                          page_count=pages_done, error=str(exc))
 
 
 class PdfTranslatorEngine:
@@ -245,159 +439,67 @@ class PdfTranslatorEngine:
         progress_cb:      Callable[[float], None] | None = None,
         cancel_event=None,
     ) -> PdfResult:
+        """Run extraction, translation and PDF rewriting back-to-back with no
+        pause for manual review — the direct, one-click path."""
         try:
-            import fitz  # pymupdf
+            import fitz  # noqa: F401  (surface the dependency error up front)
         except ImportError:
             return PdfResult(output=output_path, success=False,
                               error=f"pymupdf non disponibile — {pip_hint('pymupdf')}")
 
+        def _scaled(lo: float, hi: float):
+            if not progress_cb:
+                return None
+            return lambda f: progress_cb(lo + f * (hi - lo))
+
         try:
-            doc = fitz.open(str(input_path))
+            extracted = extract_sections(
+                input_path, include_scanned=include_scanned,
+                cancel_event=cancel_event, progress_cb=_scaled(0.0, 0.4))
         except Exception as exc:
             return PdfResult(output=output_path, success=False, error=str(exc))
 
-        ocr_ready = include_scanned and ocr_available()
-        total = doc.page_count or 1
-        pages_done = 0
-
-        # Track how many lines actually translated vs. failed. The per-line
-        # fallback below keeps one bad line from killing the whole job, but if
-        # EVERY line fails (e.g. the language pair isn't really installed, or
-        # the MT model can't load) the output is just a copy of the source —
-        # we must report that as an error, not a silent "success".
-        translated_ok      = 0
-        translate_errors   = 0
-        first_error        = ""
-        # A scanned page with no digital text needs OCR to recover anything —
-        # if the user asked for it but RapidOCR isn't installed, that page
-        # is silently left untouched. Count it so the result can say so
-        # explicitly instead of reporting a fake full-document success.
-        ocr_needed_missing = 0
-
-        try:
-            for i, page in enumerate(doc):
-                if cancel_event is not None and cancel_event.is_set():
-                    break
-
-                lines = _digital_text_lines(page)
-                if not lines:
-                    if ocr_ready:
-                        try:
-                            lines = _ocr_lines(page)
-                        except Exception:
-                            # OCR failed on this page — leave it untouched
-                            # rather than aborting the whole document.
-                            lines = []
-                    elif include_scanned:
-                        ocr_needed_missing += 1
-
-                if lines:
-                    paragraphs = _group_into_paragraphs(lines)
-                    for p in paragraphs:
-                        # A single paragraph that the MT engine chokes on
-                        # must not throw away every other page already
-                        # done — fall back to leaving it untranslated.
-                        try:
-                            p["translated"] = translate_text(
-                                p["text"], src, tgt, glossary, engine=engine)
-                            translated_ok += 1
-                        except Exception as exc:
-                            p["translated"] = p["text"]
-                            translate_errors += 1
-                            if not first_error:
-                                first_error = str(exc)
-                    # Page rotation handling: get_text()/get_pixmap() report
-                    # boxes in the *displayed* (rotated) coordinate system,
-                    # but add_redact_annot()/insert_textbox() operate in the
-                    # page's *unrotated* base system. On a rotated page (e.g.
-                    # this scanned manual is /Rotate 270) the two disagree, so
-                    # without converting them the white-out misses the original
-                    # text and the translation lands rotated and out of place.
-                    # derotation_matrix is the identity on an unrotated page,
-                    # so this is a no-op for the common case.
-                    derot = page.derotation_matrix
-                    rot   = page.rotation
-                    for p in paragraphs:
-                        p["rect"] = fitz.Rect(p["bbox"]) * derot
-
-                    # apply_redactions() unconditionally drops every link
-                    # overlapping a redacted rect (pymupdf docs/wiki) — a
-                    # text line under a hyperlink is the common case (URLs,
-                    # mailto:, page jumps), so without this the translated
-                    # PDF would silently lose all its links. Capture and
-                    # recreate them across the redaction.
-                    links = page.get_links()
-                    for p in paragraphs:
-                        # Redact every original line individually (precise,
-                        # matches exactly where the source text was) even
-                        # though the translation gets re-inserted into their
-                        # combined rect below.
-                        for rect in p["line_rects"]:
-                            page.add_redact_annot(fitz.Rect(rect) * derot, fill=(1, 1, 1))
-                    page.apply_redactions()
-                    for link in links:
-                        # The xref refers to the link object apply_redactions()
-                        # just destroyed — insert_link() must create a new
-                        # object, not be pointed at the dead one.
-                        link.pop("xref", None)
-                        page.insert_link(link)
-                    for p in paragraphs:
-                        _insert_autoshrink(
-                            page, p["rect"], p["translated"],
-                            base_size=p["size"], color=_int_to_rgb(p["color"]),
-                            fontname=_pick_font(p["font"]), rotate=rot)
-
-                pages_done = i + 1
-                if progress_cb:
-                    progress_cb(pages_done / total)
-
+        cancelled = cancel_event is not None and cancel_event.is_set()
+        translated_ok = translate_errors = 0
+        first_error = ""
+        if not cancelled:
+            translated_ok, translate_errors, first_error = translate_sections(
+                extracted.sections, src, tgt, glossary, engine=engine,
+                cancel_event=cancel_event, progress_cb=_scaled(0.4, 0.8))
             cancelled = cancel_event is not None and cancel_event.is_set()
 
-            if not cancelled and translated_ok == 0:
-                doc.close()
-                # Nothing was translated anywhere in the document — figure out
-                # why and report it instead of pretending the job succeeded.
-                if ocr_needed_missing > 0 and translate_errors == 0:
-                    return PdfResult(
-                        output=output_path, success=False, page_count=pages_done,
-                        error=(f"Il PDF sembra scansionato (nessun testo "
-                               f"digitale) e l'OCR non è disponibile: "
-                               f"installa il motore OCR "
-                               f"({pip_hint('rapidocr_onnxruntime')}), poi riprova. "
-                               f"{ocr_needed_missing} pagina/e coinvolta/e."))
-                if translate_errors > 0:
-                    # Every line failed to translate → the output is an
-                    # unchanged copy of the source (the common case: the
-                    # chosen language pair was never downloaded, or its
-                    # model can't be loaded at runtime).
-                    return PdfResult(
-                        output=output_path, success=False, page_count=pages_done,
-                        error=(f"Nessuna riga è stata tradotta: la coppia di "
-                               f"lingue {src}→{tgt} non risulta utilizzabile. "
-                               f"Apri 'Gestisci lingue' e scarica/reinstalla la "
-                               f"coppia. Dettaglio tecnico: {first_error}"))
+        if not cancelled and translated_ok == 0:
+            # Nothing was translated anywhere in the document — figure out
+            # why and report it instead of pretending the job succeeded.
+            if extracted.ocr_needed_missing > 0 and translate_errors == 0:
                 return PdfResult(
-                    output=output_path, success=False, page_count=pages_done,
-                    error="Nessun testo trovato nel PDF: nessuna pagina conteneva "
-                          "testo da tradurre.")
+                    output=output_path, success=False, page_count=extracted.page_count,
+                    error=(f"Il PDF sembra scansionato (nessun testo "
+                           f"digitale) e l'OCR non è disponibile: "
+                           f"installa il motore OCR "
+                           f"({pip_hint('rapidocr_onnxruntime')}), poi riprova. "
+                           f"{extracted.ocr_needed_missing} pagina/e coinvolta/e."))
+            if translate_errors > 0:
+                # Every line failed to translate → the output would be an
+                # unchanged copy of the source (the common case: the chosen
+                # language pair was never downloaded, or its model can't be
+                # loaded at runtime).
+                return PdfResult(
+                    output=output_path, success=False, page_count=extracted.page_count,
+                    error=(f"Nessuna riga è stata tradotta: la coppia di "
+                           f"lingue {src}→{tgt} non risulta utilizzabile. "
+                           f"Apri 'Gestisci lingue' e scarica/reinstalla la "
+                           f"coppia. Dettaglio tecnico: {first_error}"))
+            return PdfResult(
+                output=output_path, success=False, page_count=extracted.page_count,
+                error="Nessun testo trovato nel PDF: nessuna pagina conteneva "
+                      "testo da tradurre.")
 
-            doc.save(str(output_path))
-            doc.close()
-            warning = ""
-            if ocr_needed_missing > 0:
-                warning = (f"{ocr_needed_missing} pagina/e scansionata/e ignorata/e: "
-                           f"installa il motore OCR per tradurle "
-                           f"({pip_hint('rapidocr_onnxruntime')}).")
-            return PdfResult(output=output_path, success=True, cancelled=cancelled,
-                              page_count=pages_done, warning=warning,
-                              file_size=output_path.stat().st_size)
-        except Exception as exc:
-            # Best-effort: keep whatever pages were already translated
-            # instead of discarding the whole job on one fatal error.
-            try:
-                doc.save(str(output_path))
-            except Exception:
-                pass
-            doc.close()
-            return PdfResult(output=output_path, success=False,
-                              page_count=pages_done, error=str(exc))
+        result = apply_translation(
+            input_path, output_path, extracted.sections, extracted.page_count,
+            cancel_event=cancel_event, progress_cb=_scaled(0.8, 1.0))
+        if result.success and extracted.ocr_needed_missing > 0:
+            result.warning = (f"{extracted.ocr_needed_missing} pagina/e scansionata/e "
+                               f"ignorata/e: installa il motore OCR per tradurle "
+                               f"({pip_hint('rapidocr_onnxruntime')}).")
+        return result
