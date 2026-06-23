@@ -241,6 +241,7 @@ class PdfTranslatorEngine:
         tgt:              str,
         include_scanned:  bool = True,
         glossary:         dict[str, str] | None = None,
+        engine:           str = "argos",
         progress_cb:      Callable[[float], None] | None = None,
         cancel_event=None,
     ) -> PdfResult:
@@ -297,7 +298,8 @@ class PdfTranslatorEngine:
                         # must not throw away every other page already
                         # done — fall back to leaving it untranslated.
                         try:
-                            p["translated"] = translate_text(p["text"], src, tgt, glossary)
+                            p["translated"] = translate_text(
+                                p["text"], src, tgt, glossary, engine=engine)
                             translated_ok += 1
                         except Exception as exc:
                             p["translated"] = p["text"]

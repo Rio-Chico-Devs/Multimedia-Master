@@ -29,3 +29,19 @@ argostranslate>=1.11.0,<2
 #    Splits OCR-glued English words ("POWERUNITS" -> "POWER UNITS") before
 #    translation. MIT-licensed, fully offline, ships its own word list.
 wordninja>=2.0.0,<3
+
+# ── PDF translation — alternative engine (mBART-50) ───────────────────────────
+#    Optional, heavier alternative to argostranslate: one general-purpose
+#    50-language model (facebook/mbart-large-50-many-to-many-mmt) instead of
+#    many small per-pair ones. MIT-licensed (inherited from fairseq, see
+#    tools/pdf_manager/core/mbart_engine.py). The model weights (~2.3 GB) are
+#    downloaded once from the Hugging Face Hub on first use and cached
+#    locally; every call after that runs with local_files_only=True, so this
+#    never touches the network again — even if Hugging Face is unreachable.
+#    Not installed by default: this pulls in torch (CPU build, still a large
+#    download) on top of transformers, and inference is noticeably slower per
+#    paragraph than argostranslate. Skip this block if you only want the
+#    default engine.
+transformers>=4.30,<5
+sentencepiece>=0.1.99,<1
+torch>=2.0,<3

@@ -19,8 +19,14 @@ from .file_widgets import SingleFilePicker
 from .widgets       import SectionLabel, Separator, StatusBar, adaptive_wraplength
 from core.pdf_translator_engine import PdfTranslatorEngine
 from core import translate_engine as te
+from core import mbart_engine as me
+from core.glossary_presets import AGRICULTURAL_EN_IT
 
 _GLOSSARY_KEY = "translate_glossary"
+_ENGINE_LABELS = {
+    "argos": "Argos Translate (predefinito, veloce)",
+    "mbart": "mBART-50 (modello più ampio, più lento, sperimentale)",
+}
 
 
 # ── Glossary dialog ──────────────────────────────────────────────────────────
@@ -55,6 +61,9 @@ class _GlossaryDialog(ctk.CTkToplevel):
         btn_row.pack(fill="x", padx=16, pady=(8, 0))
         ctk.CTkButton(btn_row, text="+ Aggiungi termine", height=28,
                       command=lambda: self._add_row()).pack(side="left")
+        ctk.CTkButton(btn_row, text="Carica preset macchine agricole (EN→IT)",
+                      height=28, fg_color="#2a3a2a", hover_color="#3a4a3a",
+                      command=self._load_preset).pack(side="left", padx=(8, 0))
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=16, pady=14)
@@ -80,6 +89,14 @@ class _GlossaryDialog(ctk.CTkToplevel):
     def _remove_row(self, row) -> None:
         self._rows = [r for r in self._rows if r[2] is not row]
         row.destroy()
+
+    def _load_preset(self) -> None:
+        """Add the starter agricultural (EN->IT) terms that aren't already
+        present, without touching or duplicating existing rows."""
+        existing = {e_term.get().strip().lower() for e_term, _, _ in self._rows}
+        for term, repl in AGRICULTURAL_EN_IT.items():
+            if term.lower() not in existing:
+                self._add_row(term, repl)
 
     def _save(self) -> None:
         glossary = {}
@@ -226,6 +243,8 @@ class TranslateTab(ctk.CTkFrame):
         self._pairs:      list = []
         self._src_labels: dict = {}
         self._tgt_labels: dict = {}
+        self._mbart_codes: dict = {}
+        self._mt_engine:  str = "argos"
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -254,6 +273,20 @@ class TranslateTab(ctk.CTkFrame):
         main.grid(row=1, column=0, sticky="nsew")
         main.grid_columnconfigure(0, weight=1)
 
+        SectionLabel(main, "Motore di traduzione").pack(fill="x", padx=12, pady=(12, 4))
+        engine_row = ctk.CTkFrame(main, fg_color="transparent")
+        engine_row.pack(fill="x", padx=12, pady=(0, 4))
+        self._engine_var = ctk.StringVar(value=_ENGINE_LABELS["argos"])
+        ctk.CTkOptionMenu(engine_row, variable=self._engine_var,
+                           values=list(_ENGINE_LABELS.values()),
+                           command=self._on_engine_change, width=320,
+                           ).pack(side="left")
+        self._engine_note = ctk.CTkLabel(
+            main, text="", text_color="#888", font=ctk.CTkFont(size=10),
+            justify="left")
+        self._engine_note.pack(fill="x", padx=12)
+        adaptive_wraplength(self._engine_note)
+
         SectionLabel(main, "Lingue").pack(fill="x", padx=12, pady=(12, 4))
 
         lang_row = ctk.CTkFrame(main, fg_color="transparent")
@@ -270,8 +303,10 @@ class TranslateTab(ctk.CTkFrame):
                                             values=["—"], width=160)
         self._tgt_menu.pack(side="left")
 
-        ctk.CTkButton(lang_row, text="Gestisci lingue", height=28,
-                      command=self._open_language_dialog).pack(side="right")
+        self._manage_lang_btn = ctk.CTkButton(
+            lang_row, text="Gestisci lingue", height=28,
+            command=self._open_language_dialog)
+        self._manage_lang_btn.pack(side="right")
 
         self._no_lang_lbl = ctk.CTkLabel(
             main, text="", text_color="#f44336",
@@ -347,8 +382,12 @@ class TranslateTab(ctk.CTkFrame):
 
     def _on_src_change(self, _label: str) -> None:
         src_code = self._src_labels.get(self._src_var.get())
-        targets = sorted({(t, tn) for f, _, t, tn in self._pairs if f == src_code},
-                         key=lambda x: x[1])
+        if self._mt_engine == "mbart":
+            targets = sorted((c, me.display_name(c))
+                              for c in self._mbart_codes if c != src_code)
+        else:
+            targets = sorted({(t, tn) for f, _, t, tn in self._pairs if f == src_code},
+                             key=lambda x: x[1])
         self._tgt_labels = {f"{tn} ({t})": t for t, tn in targets}
         self._tgt_menu.configure(values=list(self._tgt_labels.keys()) or ["—"])
         if targets:
@@ -359,6 +398,50 @@ class TranslateTab(ctk.CTkFrame):
 
     def _open_glossary_dialog(self) -> None:
         _GlossaryDialog(self, self._settings)
+
+    # ── Engine selection ───────────────────────────────────────────────────
+
+    def _on_engine_change(self, label: str) -> None:
+        self._mt_engine = "mbart" if label == _ENGINE_LABELS["mbart"] else "argos"
+        self._manage_lang_btn.configure(
+            state="disabled" if self._mt_engine == "mbart" else "normal")
+        if self._mt_engine == "mbart":
+            self._engine_note.configure(
+                text="Il modello (~2.3 GB) viene scaricato una sola volta al "
+                     "primo utilizzo; da quel momento la traduzione resta "
+                     "sempre offline, anche se Hugging Face non è raggiungibile.")
+            self._no_lang_lbl.configure(text="")
+            self._status.busy("Carico le lingue di mBART-50…")
+            threading.Thread(target=self._worker_load_mbart_langs, daemon=True).start()
+        else:
+            self._engine_note.configure(text="")
+            self._refresh_languages()
+
+    def _worker_load_mbart_langs(self) -> None:
+        try:
+            codes = me.language_codes()
+            self.after(0, self._mbart_langs_loaded, codes, None)
+        except Exception as exc:
+            self.after(0, self._mbart_langs_loaded, {}, str(exc))
+
+    def _mbart_langs_loaded(self, codes: dict, error: str | None) -> None:
+        if error or not codes:
+            from common.depmsg import pip_hint
+            self._no_lang_lbl.configure(
+                text="mBART-50 non disponibile — "
+                     f"{pip_hint('transformers torch sentencepiece')}")
+            self._src_menu.configure(values=["—"])
+            self._tgt_menu.configure(values=["—"])
+            self._src_var.set("—")
+            self._tgt_var.set("—")
+            self._status.err("mBART-50 non disponibile." + (f" {error}" if error else ""))
+            return
+        self._mbart_codes = codes
+        self._src_labels = {f"{me.display_name(c)} ({c})": c for c in codes}
+        self._src_menu.configure(values=list(self._src_labels.keys()))
+        self._src_var.set(next(iter(self._src_labels)))
+        self._on_src_change(self._src_var.get())
+        self._status.ok(f"{len(codes)} lingue disponibili con mBART-50")
 
     # ── File / dir ─────────────────────────────────────────────────────────
 
@@ -418,15 +501,16 @@ class TranslateTab(ctk.CTkFrame):
 
         threading.Thread(
             target=self._worker,
-            args=(pdf, out_path, src, tgt, self._ocr_var.get(), glossary),
+            args=(pdf, out_path, src, tgt, self._ocr_var.get(), glossary, self._mt_engine),
             daemon=True,
         ).start()
 
-    def _worker(self, pdf, out_path, src, tgt, include_scanned, glossary) -> None:
+    def _worker(self, pdf, out_path, src, tgt, include_scanned, glossary, engine) -> None:
         result = self._engine.translate_pdf(
             pdf, out_path, src, tgt,
             include_scanned=include_scanned,
             glossary=glossary,
+            engine=engine,
             progress_cb=lambda f: self.after(0, self._progress.set, f),
             cancel_event=self._cancel_event,
         )
