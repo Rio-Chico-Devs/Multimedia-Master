@@ -128,7 +128,7 @@ class SectionReviewDialog(ctk.CTkToplevel):
 
         last_page = None
         for section in sections:
-            page = section.get("page")
+            page = section.get("page", 0)
             if page != last_page:
                 ctk.CTkLabel(list_frame, text=f"Pagina {page + 1}",
                              font=ctk.CTkFont(size=12, weight="bold"),

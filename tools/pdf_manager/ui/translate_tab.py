@@ -26,6 +26,12 @@ from core import mbart_engine as me
 from core.glossary_presets import AGRICULTURAL_EN_IT
 
 _GLOSSARY_KEY = "translate_glossary"
+# Building the review dialog creates several widgets per section (frame,
+# label, textbox, button) all on the main thread — Tkinter has no way to
+# create them off it. Past a few hundred sections that construction is
+# slow enough to look like a freeze, so warn first and force a redraw
+# (update_idletasks) so the message is actually on screen before it happens.
+_MANY_SECTIONS_WARN = 250
 _ENGINE_LABELS = {
     "argos": "Argos Translate (predefinito, veloce)",
     "mbart": "mBART-50 (modello più ampio, più lento, sperimentale)",
@@ -560,19 +566,39 @@ class TranslateTab(ctk.CTkFrame):
             return
         if not extracted.sections:
             self._finish_busy()
-            self._status.err("Nessun testo trovato nel PDF: nessuna pagina "
-                              "conteneva testo da tradurre.")
+            if extracted.ocr_needed_missing > 0:
+                from common.depmsg import pip_hint
+                self._status.err(
+                    f"Il PDF sembra scansionato (nessun testo digitale) e "
+                    f"l'OCR non è disponibile: installa il motore OCR "
+                    f"({pip_hint('rapidocr_onnxruntime')}), poi riprova.")
+            else:
+                self._status.err("Nessun testo trovato nel PDF: nessuna "
+                                  "pagina conteneva testo da tradurre.")
             return
         self._progress.set(0)
-        self._status.ok(f"{len(extracted.sections)} sezioni trovate — "
-                         f"controllale prima di tradurre.")
-        SectionReviewDialog(
-            self, extracted.sections, mode="source",
+        self._open_section_review(
+            extracted.sections, mode="source",
             title="Revisione testo estratto",
             intro="Controlla le sezioni trovate nel PDF. Rimuovi (✕) quelle "
                   "che non vuoi tradurre o che creano problemi, oppure "
                   "correggi il testo prima di procedere.",
             on_done=lambda confirmed: self._pre_review_done(job, confirmed))
+
+    def _open_section_review(self, sections: list, *, mode: str, title: str,
+                              intro: str, on_done) -> None:
+        n = len(sections)
+        msg = f"{n} sezioni trovate — controllale prima di continuare."
+        if n > _MANY_SECTIONS_WARN:
+            msg += " L'apertura della finestra può richiedere alcuni secondi."
+        self._status.ok(msg)
+        # Force the status text on screen now: building the dialog below packs
+        # one widget set per section on this same (main) thread, with no
+        # opportunity to redraw until it's done — without this the message
+        # above would never actually be seen before the UI appears to hang.
+        self.update_idletasks()
+        SectionReviewDialog(self, sections, mode=mode, title=title, intro=intro,
+                             on_done=on_done)
 
     def _pre_review_done(self, job: dict, confirmed: bool) -> None:
         if not confirmed:
@@ -612,8 +638,8 @@ class TranslateTab(ctk.CTkFrame):
             return
         self._progress.set(0)
         active = [s for s in extracted.sections if not s.get("removed")]
-        SectionReviewDialog(
-            self, active, mode="translation",
+        self._open_section_review(
+            active, mode="translation",
             title="Revisione traduzione",
             intro="Controlla il risultato. Puoi correggere il testo tradotto "
                   "o rimuovere (✕) una sezione per lasciarla come "
