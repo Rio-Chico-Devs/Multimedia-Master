@@ -10,6 +10,7 @@ terminology that the small offline model would otherwise translate loosely.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import customtkinter as ctk
@@ -30,6 +31,64 @@ _ENGINE_LABELS = {
     "argos": "Argos Translate (predefinito, veloce)",
     "mbart": "mBART-50 (modello più ampio, più lento, sperimentale)",
 }
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Human ETA: '45s', '2m 05s', '1h 12m'."""
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{seconds}s"
+    m, s = divmod(seconds, 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m"
+
+
+class _ProgressReporter:
+    """Bridges worker-thread progress to the Tk main thread, throttled.
+
+    A long job calls its progress callback once per paragraph/page — up to
+    thousands of times. Marshalling every one onto the UI thread with after()
+    floods Tk's event queue with redraw work, and that flood is itself a source
+    of lag (events pile up faster than the loop drains them — see TkDocs event
+    loop notes). So we throttle here, in the worker thread (cheap, no Tk calls):
+    emit at most one UI update per _MIN_INTERVAL, plus always the final 100%.
+    From the elapsed time within a phase we derive a live ETA and a percentage,
+    turning a silent bar into a "what's happening / how long is left" readout.
+    """
+    _MIN_INTERVAL = 0.12   # seconds between UI updates
+    _MIN_DELTA    = 0.01   # ...unless progress jumped at least this much
+
+    def __init__(self, tab: "TranslateTab"):
+        self._tab         = tab
+        self._phase       = ""
+        self._phase_start = 0.0
+        self._last_emit   = 0.0
+        self._last_frac   = -1.0
+
+    def start_phase(self, label: str) -> None:
+        """Begin a named phase. The bar pulses (indeterminate) until the first
+        real fraction arrives, so a slow cold-start — loading the MT model, the
+        first OCR page — reads as work-in-progress rather than a freeze."""
+        self._phase       = label
+        self._phase_start = time.monotonic()
+        self._last_emit   = 0.0
+        self._last_frac   = -1.0
+        self._tab.after(0, self._tab._set_progress_ui, -1.0, label, "")
+
+    def update(self, frac: float) -> None:
+        now = time.monotonic()
+        if (frac < 1.0 and (now - self._last_emit) < self._MIN_INTERVAL
+                and abs(frac - self._last_frac) < self._MIN_DELTA):
+            return
+        self._last_emit = now
+        self._last_frac = frac
+        eta = ""
+        if frac > 0.02:
+            elapsed = now - self._phase_start
+            eta = _fmt_duration(elapsed / frac - elapsed)
+        self._tab.after(0, self._tab._set_progress_ui, frac, self._phase, eta)
 
 
 # ── Glossary dialog ──────────────────────────────────────────────────────────
@@ -248,6 +307,8 @@ class TranslateTab(ctk.CTkFrame):
         self._tgt_labels: dict = {}
         self._mbart_codes: dict = {}
         self._mt_engine:  str = "argos"
+        self._indeterminate = False
+        self._reporter = _ProgressReporter(self)
         self._build()
 
     # ── Build ──────────────────────────────────────────────────────────────
@@ -350,7 +411,10 @@ class TranslateTab(ctk.CTkFrame):
 
         self._progress = ctk.CTkProgressBar(main, height=6, corner_radius=3)
         self._progress.set(0)
-        self._progress.pack(fill="x", padx=12, pady=(8, 4))
+        self._progress.pack(fill="x", padx=12, pady=(8, 2))
+        self._progress_lbl = ctk.CTkLabel(main, text="", text_color="#888",
+                                          font=ctk.CTkFont(size=10), anchor="w")
+        self._progress_lbl.pack(fill="x", padx=12, pady=(0, 4))
 
         run_row = ctk.CTkFrame(main, fg_color="transparent")
         run_row.pack(fill="x", padx=12, pady=(0, 12))
@@ -507,22 +571,34 @@ class TranslateTab(ctk.CTkFrame):
         self._cancel_event.clear()
         self._btn_translate.configure(state="disabled")
         self._btn_cancel.configure(state="normal")
-        self._progress.set(0)
 
         include_scanned = self._ocr_var.get()
+        advisory = self._load_advisory(self._mt_engine, include_scanned)
         if self._review_var.get():
             job = dict(pdf=pdf, out_path=out_path, src=src, tgt=tgt,
                        include_scanned=include_scanned, glossary=glossary,
                        engine=self._mt_engine)
-            self._status.busy("Estrazione testo in corso…")
+            self._reporter.start_phase("Estrazione testo")
+            self._status.busy("Estrazione testo in corso…" + advisory)
             threading.Thread(target=self._worker_extract, args=(job,), daemon=True).start()
         else:
-            self._status.busy("Traduzione in corso…")
+            self._reporter.start_phase("Traduzione")
+            self._status.busy("Traduzione in corso…" + advisory)
             threading.Thread(
                 target=self._worker,
                 args=(pdf, out_path, src, tgt, include_scanned, glossary, self._mt_engine),
                 daemon=True,
             ).start()
+
+    def _load_advisory(self, engine: str, include_scanned: bool) -> str:
+        """A short up-front heads-up when the job is likely to be heavy, so a
+        long wait is expected rather than mistaken for a hang."""
+        notes = []
+        if engine == "mbart":
+            notes.append("modello ampio (~2.3 GB al primo avvio), più lento")
+        if include_scanned:
+            notes.append("OCR pagine scansionate può richiedere tempo")
+        return f"  ⚠ {'; '.join(notes)}" if notes else ""
 
     def _worker(self, pdf, out_path, src, tgt, include_scanned, glossary, engine) -> None:
         result = self._engine.translate_pdf(
@@ -530,7 +606,7 @@ class TranslateTab(ctk.CTkFrame):
             include_scanned=include_scanned,
             glossary=glossary,
             engine=engine,
-            progress_cb=lambda f: self.after(0, self._progress.set, f),
+            progress_cb=self._reporter.update,
             cancel_event=self._cancel_event,
         )
         self.after(0, self._done, result)
@@ -542,7 +618,7 @@ class TranslateTab(ctk.CTkFrame):
             extracted = extract_sections(
                 job["pdf"], include_scanned=job["include_scanned"],
                 cancel_event=self._cancel_event,
-                progress_cb=lambda f: self.after(0, self._progress.set, f))
+                progress_cb=self._reporter.update)
         except Exception as exc:
             self.after(0, self._review_failed, str(exc))
             return
@@ -570,7 +646,7 @@ class TranslateTab(ctk.CTkFrame):
                 self._status.err("Nessun testo trovato nel PDF: nessuna "
                                   "pagina conteneva testo da tradurre.")
             return
-        self._progress.set(0)
+        self._reset_progress()
         self._open_section_review(
             extracted.sections, mode="source",
             title="Revisione testo estratto",
@@ -590,7 +666,9 @@ class TranslateTab(ctk.CTkFrame):
             self._finish_busy()
             self._status.ok("Traduzione annullata.")
             return
-        self._status.busy("Traduzione in corso…")
+        self._reporter.start_phase("Traduzione")
+        self._status.busy("Traduzione in corso…"
+                          + self._load_advisory(job["engine"], False))
         threading.Thread(target=self._worker_translate, args=(job,), daemon=True).start()
 
     def _worker_translate(self, job: dict) -> None:
@@ -598,7 +676,7 @@ class TranslateTab(ctk.CTkFrame):
         translated_ok, translate_errors, first_error = translate_sections(
             extracted.sections, job["src"], job["tgt"], job["glossary"],
             engine=job["engine"], cancel_event=self._cancel_event,
-            progress_cb=lambda f: self.after(0, self._progress.set, f))
+            progress_cb=self._reporter.update)
         job["translated_ok"]    = translated_ok
         job["translate_errors"] = translate_errors
         job["first_error"]      = first_error
@@ -621,7 +699,7 @@ class TranslateTab(ctk.CTkFrame):
             else:
                 self._status.err("Nessuna sezione da tradurre (tutte rimosse?).")
             return
-        self._progress.set(0)
+        self._reset_progress()
         active = [s for s in extracted.sections if not s.get("removed")]
         self._open_section_review(
             active, mode="translation",
@@ -636,6 +714,7 @@ class TranslateTab(ctk.CTkFrame):
             self._finish_busy()
             self._status.ok("Traduzione annullata.")
             return
+        self._reporter.start_phase("Scrittura PDF")
         self._status.busy("Scrittura del PDF…")
         threading.Thread(target=self._worker_apply, args=(job,), daemon=True).start()
 
@@ -644,7 +723,7 @@ class TranslateTab(ctk.CTkFrame):
         result = apply_translation(
             job["pdf"], job["out_path"], extracted.sections, extracted.page_count,
             cancel_event=self._cancel_event,
-            progress_cb=lambda f: self.after(0, self._progress.set, f))
+            progress_cb=self._reporter.update)
         if result.success and extracted.ocr_needed_missing > 0:
             from common.depmsg import pip_hint
             result.warning = (f"{extracted.ocr_needed_missing} pagina/e "
@@ -659,11 +738,43 @@ class TranslateTab(ctk.CTkFrame):
         self._cancel_event.set()
         self._status.busy("Annullamento…")
 
+    # ── Progress UI (main thread only) ────────────────────────────────────────
+
+    def _set_progress_ui(self, frac: float, phase: str, eta: str) -> None:
+        """Render one throttled progress tick. frac < 0 means "preparing": the
+        bar pulses (indeterminate) until the first measurable fraction, so a
+        cold-start doesn't look frozen."""
+        if frac < 0:
+            if not self._indeterminate:
+                self._progress.configure(mode="indeterminate")
+                self._progress.start()
+                self._indeterminate = True
+            self._progress_lbl.configure(text=f"{phase}… preparazione")
+            return
+        if self._indeterminate:
+            self._progress.stop()
+            self._progress.configure(mode="determinate")
+            self._indeterminate = False
+        self._progress.set(frac)
+        txt = f"{phase} · {int(frac * 100)}%"
+        if eta:
+            txt += f" · ~{eta} rimanenti"
+        self._progress_lbl.configure(text=txt)
+
+    def _reset_progress(self) -> None:
+        if self._indeterminate:
+            self._progress.stop()
+            self._progress.configure(mode="determinate")
+            self._indeterminate = False
+        self._progress.set(0)
+        self._progress_lbl.configure(text="")
+
     def _finish_busy(self) -> None:
         self._busy = False
         self._btn_cancel.configure(state="disabled")
         state = "normal" if self._picker.get_path() else "disabled"
         self._btn_translate.configure(state=state)
+        self._reset_progress()
 
     def _done(self, result) -> None:
         self._finish_busy()
@@ -671,6 +782,8 @@ class TranslateTab(ctk.CTkFrame):
             self._status.ok(f"Annullato — {result.page_count} pagine tradotte "
                              f"su {result.output.name}")
         elif result.success:
+            self._progress.set(1.0)
+            self._progress_lbl.configure(text="Completato ✓")
             msg = f"Tradotto: {result.output.name}"
             if result.warning:
                 msg += f"  ⚠ {result.warning}"

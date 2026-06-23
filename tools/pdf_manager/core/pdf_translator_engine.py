@@ -261,8 +261,13 @@ def extract_sections(
 
     doc = fitz.open(str(input_path))
     try:
-        ocr_ready  = include_scanned and ocr_available()
+        # Build the OCR engine lazily — only the first time a page turns out to
+        # have no digital text. ocr_available() loads three ONNX models (a real
+        # cold-start cost), so a fully digital PDF (the common case) must never
+        # pay for it just because the "include scanned pages" box is ticked.
         total      = doc.page_count or 1
+        ocr_ready   = False
+        ocr_checked = False
         sections: list[dict] = []
         ocr_needed_missing = 0
 
@@ -272,6 +277,9 @@ def extract_sections(
 
             lines = _digital_text_lines(page)
             if not lines:
+                if include_scanned and not ocr_checked:
+                    ocr_ready   = ocr_available()
+                    ocr_checked = True
                 if ocr_ready:
                     try:
                         lines = _ocr_lines(page)

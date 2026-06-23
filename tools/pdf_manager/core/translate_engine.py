@@ -37,9 +37,38 @@ ones. Same offline guarantee, heavier dependency, slower per paragraph.
 """
 from __future__ import annotations
 
+import os
 import re
+from functools import lru_cache
 
 from common.depmsg import pip_hint
+
+
+def _configure_argos_threads() -> None:
+    """Let CTranslate2 (argostranslate's inference backend) use the machine's
+    cores for each translation. argostranslate reads ARGOS_INTER_THREADS
+    (parallel translators, default "1") and ARGOS_INTRA_THREADS (threads per
+    translation, default "0" = a conservative auto value) from the environment
+    at import time, and env vars take priority over its settings file.
+
+    We translate one paragraph at a time, so the lever that helps is
+    intra_threads — more cores working on each paragraph lowers its latency.
+    CTranslate2's guidance is to keep inter_threads * intra_threads at or below
+    the physical core count, so with inter_threads left at 1 we set
+    intra_threads to the core count (capped — past ~8 the gain flattens and the
+    thread overhead grows). setdefault() means an explicit user override always
+    wins.
+
+    Sources:
+      - argostranslate settings: ARGOS_INTER_THREADS / ARGOS_INTRA_THREADS
+        (github.com/argosopentech/argos-translate settings.py)
+      - CTranslate2 multithreading guidance (opennmt.net/CTranslate2/parallel)
+    """
+    cores = os.cpu_count() or 1
+    os.environ.setdefault("ARGOS_INTRA_THREADS", str(max(1, min(cores, 8))))
+
+
+_configure_argos_threads()
 
 
 class TranslateUnavailable(Exception):
@@ -125,9 +154,15 @@ def _get_wordninja():
     return _wordninja
 
 
+@lru_cache(maxsize=50000)
 def _split_glued_word(token: str) -> str:
     """Best-effort split of an OCR-glued English token ('POWERUNITS' ->
     'POWER UNITS').
+
+    Cached: a manual reuses the same vocabulary thousands of times, and each
+    miss runs wordninja's splitter plus a per-piece re-split verification —
+    pure-Python work that holds the GIL and so competes with the UI thread.
+    Memoising collapses all repeats of a token to a single dict lookup.
 
     Conservative on purpose: a genuine single word (even a long one) splits
     to itself, so we only break a token when wordninja finds >= 2 pieces that
