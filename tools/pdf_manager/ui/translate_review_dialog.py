@@ -5,13 +5,18 @@ Used twice per job (see translate_tab.py):
   1. After extraction, on the *source* text: the user sees every section the
      engine found, can drop ones that are noise/garbled ("✕") or fix the
      source text before it ever reaches the MT engine.
-  2. After translation, on the *translated* text: same list, now editable on
-     the translated side, with the original kept alongside as a reference.
+  2. After translation, on the *translated* text: same sections, now editable
+     on the translated side, with the original kept alongside as a reference.
 
-Both phases share one widget (mode="source" / mode="translation") since the
-layout — one scrollable list of cards grouped by page, each with an editable
-textbox and a remove toggle — is identical; only which field is editable and
-whether the original is shown for reference changes.
+Renders ONE PDF page's sections at a time, with Previous/Next navigation,
+instead of every section in one long scroll. A 150-page manual can easily
+produce a thousand-plus sections; building that many CTkTextbox/CTkFrame/
+CTkButton widgets in one go freezes the UI for several seconds and makes the
+scrollable frame itself sluggish to the point of feeling broken. Showing only
+the current page's handful of sections keeps widget count — and therefore
+build time — constant regardless of document size. Edits are committed back
+into the section dicts on every navigation, not just on final confirm, so
+moving between pages never loses them.
 """
 from __future__ import annotations
 
@@ -27,7 +32,7 @@ def _autosize(text: str) -> int:
     guess tuned for the dialog's width; the box stays scrollable if wrong)."""
     chars_per_line = 70
     lines = max(1, -(-len(text) // chars_per_line))  # ceil div
-    return min(max(lines, 2), 6)
+    return min(max(lines, 2), 10)
 
 
 class _SectionCard(ctk.CTkFrame):
@@ -97,55 +102,60 @@ class _SectionCard(ctk.CTkFrame):
 
 
 class SectionReviewDialog(ctk.CTkToplevel):
-    """Modal review list for every extracted/translated section, grouped by
-    page. Calls on_done(confirmed: bool) once the user continues or cancels;
-    edits are written back into the original `sections` list in place."""
+    """One-PDF-page-at-a-time review of every extracted/translated section.
+    Calls on_done(confirmed: bool) once the user continues or cancels; edits
+    are written back into the original section dicts in place."""
 
     def __init__(self, parent, sections: list[dict], *, mode: str,
                  title: str, intro: str, on_done: Callable[[bool], None]):
         super().__init__(parent)
         self._sections = sections
+        self._mode     = mode
         self._on_done  = on_done
         self._cards: list[_SectionCard] = []
+
+        # Group by PDF page, preserving the order sections were extracted in
+        # (already page-ascending). Pages with no extractable text never
+        # produced a section in the first place, so they're simply absent —
+        # nothing to review there.
+        self._pages: list[tuple[int, list[dict]]] = []
+        by_page: dict[int, list[dict]] = {}
+        for s in sections:
+            by_page.setdefault(s.get("page", 0), []).append(s)
+        self._pages = sorted(by_page.items())
+        self._page_pos = 0  # index into self._pages, not the PDF page number
 
         self.title(title)
         self.geometry("680x600")
         self.transient(parent)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self.bind("<Left>", lambda _e: self._go(-1))
+        self.bind("<Right>", lambda _e: self._go(1))
 
         ctk.CTkLabel(self, text=title, font=ctk.CTkFont(size=15, weight="bold"),
                      ).pack(pady=(14, 2))
         ctk.CTkLabel(self, text=intro, text_color="#888", font=ctk.CTkFont(size=11),
                      justify="center", wraplength=620).pack(pady=(0, 10), padx=16)
 
-        list_frame = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        list_frame.pack(fill="both", expand=True, padx=16)
+        nav = ctk.CTkFrame(self, fg_color="transparent")
+        nav.pack(fill="x", padx=16, pady=(0, 4))
+        self._prev_btn = ctk.CTkButton(nav, text="◀ Pagina precedente", width=160,
+                                        height=28, command=lambda: self._go(-1))
+        self._prev_btn.pack(side="left")
+        self._page_lbl = ctk.CTkLabel(nav, text="", font=ctk.CTkFont(size=12, weight="bold"))
+        self._page_lbl.pack(side="left", expand=True)
+        self._next_btn = ctk.CTkButton(nav, text="Pagina successiva ▶", width=160,
+                                        height=28, command=lambda: self._go(1))
+        self._next_btn.pack(side="right")
 
-        if not sections:
-            ctk.CTkLabel(list_frame, text="Nessuna sezione di testo trovata.",
-                         text_color="#888").pack(pady=20)
-
-        last_page = None
-        for section in sections:
-            page = section.get("page", 0)
-            if page != last_page:
-                ctk.CTkLabel(list_frame, text=f"Pagina {page + 1}",
-                             font=ctk.CTkFont(size=12, weight="bold"),
-                             text_color="#aaa", anchor="w",
-                             ).pack(fill="x", pady=(10, 2))
-                last_page = page
-            card = _SectionCard(list_frame, section, mode=mode,
-                                 on_toggle=self._refresh_summary)
-            card.pack(fill="x", pady=3)
-            self._cards.append(card)
+        self._content = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self._content.pack(fill="both", expand=True, padx=16)
 
         Separator(self).pack(fill="x", padx=16, pady=(8, 0))
 
-        removed_count = sum(1 for s in sections if s.get("removed"))
-        self._summary = ctk.CTkLabel(
-            self, text=f"{len(sections)} sezioni — {removed_count} rimosse",
-            text_color="#888", font=ctk.CTkFont(size=10))
+        self._summary = ctk.CTkLabel(self, text="", text_color="#888",
+                                      font=ctk.CTkFont(size=10))
         self._summary.pack(pady=(6, 0))
 
         bottom = ctk.CTkFrame(self, fg_color="transparent")
@@ -155,10 +165,56 @@ class SectionReviewDialog(ctk.CTkToplevel):
         ctk.CTkButton(bottom, text="Continua", height=34, width=120,
                       command=self._confirm).pack(side="right", padx=(0, 8))
 
+        self._render_page()
+
+    # ── Page rendering ───────────────────────────────────────────────────────
+
+    def _render_page(self) -> None:
+        for w in self._content.winfo_children():
+            w.destroy()
+        self._cards = []
+
+        if not self._pages:
+            ctk.CTkLabel(self._content, text="Nessuna sezione di testo trovata.",
+                         text_color="#888").pack(pady=20)
+            self._page_lbl.configure(text="—")
+            self._prev_btn.configure(state="disabled")
+            self._next_btn.configure(state="disabled")
+            self._refresh_summary()
+            return
+
+        pdf_page, sections = self._pages[self._page_pos]
+        self._page_lbl.configure(
+            text=f"Pagina {pdf_page + 1} del PDF "
+                 f"({self._page_pos + 1}/{len(self._pages)} con testo)")
+        self._prev_btn.configure(state="normal" if self._page_pos > 0 else "disabled")
+        self._next_btn.configure(
+            state="normal" if self._page_pos < len(self._pages) - 1 else "disabled")
+
+        for section in sections:
+            card = _SectionCard(self._content, section, mode=self._mode,
+                                 on_toggle=self._refresh_summary)
+            card.pack(fill="x", pady=3)
+            self._cards.append(card)
+
+        self._refresh_summary()
+
+    def _go(self, delta: int) -> None:
+        if not self._pages:
+            return
+        for card in self._cards:
+            card.commit()
+        new_pos = self._page_pos + delta
+        if 0 <= new_pos < len(self._pages):
+            self._page_pos = new_pos
+            self._render_page()
+
     def _refresh_summary(self) -> None:
         removed_count = sum(1 for s in self._sections if s.get("removed"))
         self._summary.configure(
-            text=f"{len(self._sections)} sezioni — {removed_count} rimosse")
+            text=f"{len(self._sections)} sezioni totali — {removed_count} rimosse")
+
+    # ── Confirm / cancel ─────────────────────────────────────────────────────
 
     def _confirm(self) -> None:
         for card in self._cards:
