@@ -468,6 +468,14 @@ class PdfTranslatorEngine:
                 cancel_event=cancel_event, progress_cb=_scaled(0.4, 0.8))
             cancelled = cancel_event is not None and cancel_event.is_set()
 
+        if cancelled:
+            # A section the run never reached has no "translated" value; leave
+            # its original content in place rather than redacting and redrawing
+            # it with the untranslated source text.
+            for s in extracted.sections:
+                if "translated" not in s:
+                    s["removed"] = True
+
         if not cancelled and translated_ok == 0:
             # Nothing was translated anywhere in the document — figure out
             # why and report it instead of pretending the job succeeded.
@@ -497,7 +505,14 @@ class PdfTranslatorEngine:
 
         result = apply_translation(
             input_path, output_path, extracted.sections, extracted.page_count,
-            cancel_event=cancel_event, progress_cb=_scaled(0.8, 1.0))
+            # On cancel we still want the work already done to survive — the
+            # old per-page pipeline left finished pages translated. Skip the
+            # sections that never got a translation (leave the original there)
+            # and let the write run to completion rather than aborting it.
+            cancel_event=None if cancelled else cancel_event,
+            progress_cb=_scaled(0.8, 1.0))
+        if cancelled:
+            result.cancelled = True
         if result.success and extracted.ocr_needed_missing > 0:
             result.warning = (f"{extracted.ocr_needed_missing} pagina/e scansionata/e "
                                f"ignorata/e: installa il motore OCR per tradurle "
