@@ -29,6 +29,13 @@ argostranslate>=1.11.0,<2
 #    Splits OCR-glued English words ("POWERUNITS" -> "POWER UNITS") before
 #    translation. MIT-licensed, fully offline, ships its own word list.
 wordninja>=2.0.0,<3
+#    Conservative OCR spell correction: fixes single-character misreads
+#    ("1n" -> "in") before the text reaches the review screen and the MT model.
+#    Ships frequency dictionaries for en/it/fr/de/es/pt/nl/ru/ar (fully offline,
+#    MIT-licensed). Only corrects genuinely-unknown words within edit distance 1
+#    and never touches acronyms, part numbers or codes, so technical manuals
+#    survive intact. Graceful no-op if absent.
+pyspellchecker>=0.8.0,<1
 
 # ── PDF translation — alternative engine (mBART-50) ───────────────────────────
 #    Optional, heavier alternative to argostranslate: one general-purpose

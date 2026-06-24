@@ -14,10 +14,13 @@ Source cleanup (why it matters so much here):
   words across lines with hyphens ("attach-ments"). Feeding those straight to
   the model produces exactly the garbage the user sees ("POTENZAUNITI", half a
   sentence left untranslated). _preprocess_source() cleans the text first —
-  collapsing whitespace and, for English source, splitting glued words back
-  apart with the optional `wordninja` package (MIT-licensed, offline, ships its
-  own word-frequency dictionary). All of this is best-effort: if wordninja
-  isn't installed the text is passed through unchanged, never crashing.
+  collapsing whitespace, splitting glued English words back apart with the
+  optional `wordninja` package (MIT-licensed, offline, ships its own
+  word-frequency dictionary), then running a conservative spell/OCR pass
+  (`pyspellchecker`, offline dictionaries for en/it/fr/de/es/pt/nl/ru/ar) that
+  fixes single-character misreads like "1n" -> "in" while leaving acronyms,
+  part numbers and unknown technical terms untouched. All of this is
+  best-effort: if a package isn't installed that step is skipped, never crashing.
 
 Glossary technique (term protection):
   Each glossary term is replaced by a unique placeholder token *before*
@@ -197,13 +200,132 @@ def _split_glued_word(token: str) -> str:
     return " ".join(parts)
 
 
+# ── Conservative OCR spell correction ────────────────────────────────────────
+# pyspellchecker ships its own frequency dictionaries for these languages and
+# runs fully offline. For any other source language we skip correction entirely
+# rather than guess with the wrong dictionary. (Package name: pyspellchecker;
+# import name: spellchecker.)
+_PYSPELL_LANGS = frozenset(
+    {"en", "es", "fr", "pt", "de", "it", "ru", "ar", "nl", "lv", "eu"})
+_spellers: dict[str, object] = {}
+_spell_tried: set[str] = set()
+# A word token: letters/digits, allowing an internal apostrophe (don't, l'OCR is
+# split by the source already). Digits are admitted so OCR misreads like "1n"
+# (for "in") are seen as one token and can be corrected, not skipped as noise.
+_TOKEN_RE = re.compile(r"[0-9A-Za-z][0-9A-Za-z'’]*")
+_SENTENCE_END = frozenset({".", "!", "?", ":", ";"})
+
+
+def _get_speller(lang: str):
+    """Lazily build (and cache) a pyspellchecker for `lang`. Returns None if the
+    language is unsupported or the optional package isn't installed, so spell
+    correction degrades to a no-op rather than an error."""
+    if lang not in _PYSPELL_LANGS:
+        return None
+    if lang not in _spell_tried:
+        _spell_tried.add(lang)
+        try:
+            from spellchecker import SpellChecker
+            sp = SpellChecker(language=lang)
+            # Edit distance 1: OCR misreads are single-character substitutions
+            # ("1n" -> "in"). Allowing distance 2 multiplies the candidate set
+            # and starts "correcting" perfectly good rare words into common
+            # ones, which is exactly the damage we must avoid on a manual.
+            sp.distance = 1
+            _spellers[lang] = sp
+        except Exception:
+            _spellers[lang] = None
+    return _spellers.get(lang)
+
+
+def _is_protected_token(tok: str) -> bool:
+    """True for tokens we must never "correct": acronyms, part numbers and other
+    codes. Wrongly normalising "BCS", "12V" or "kVA" in a technical manual is
+    worse than leaving a real typo, so the rule is deliberately cautious — only
+    plain words (and a single-digit OCR slip like "1n") get past it."""
+    digits = sum(c.isdigit() for c in tok)
+    if digits:
+        # A lone digit among lowercase letters is a plausible OCR misread
+        # ("1n", "5un"); anything else with digits is treated as a code.
+        if digits == 1 and not any(c.isupper() for c in tok):
+            return False
+        return True
+    if tok.isupper() and len(tok) >= 2:        # BCS, ABS, USA
+        return True
+    if any(c.isupper() for c in tok[1:]):      # kVA, McLaren, PnP
+        return True
+    return False
+
+
+@lru_cache(maxsize=50000)
+def _correct_token(tok: str, lang: str) -> str:
+    """Best-effort single-token correction. Returns the token unchanged unless
+    the speller is confident: the lowercased token is genuinely unknown and has
+    exactly one in-dictionary correction within edit distance 1. Cached because
+    a manual repeats its vocabulary thousands of times and each miss runs
+    pyspellchecker's candidate search (pure-Python, holds the GIL)."""
+    sp = _get_speller(lang)
+    if sp is None or len(tok) < 2 or _is_protected_token(tok):
+        return tok
+    low = tok.lower()
+    # Known word: leave it (and its original casing) completely alone.
+    if not sp.unknown([low]):
+        return tok
+    corr = sp.correction(low)
+    if not corr or corr == low:
+        return tok
+    return corr
+
+
+def _restore_case(original: str, corrected: str, at_sentence_start: bool) -> str:
+    """Re-apply the original token's capitalisation to a lowercase correction so
+    a fix never silently changes the casing of surrounding prose. A correction
+    of a sentence-initial OCR slip ("1n" -> "In") is capitalised even though the
+    digit it replaced carried no case."""
+    if corrected == original:
+        return corrected
+    if original[:1].isupper() or at_sentence_start:
+        return corrected[:1].upper() + corrected[1:]
+    return corrected
+
+
+def _spell_correct(text: str, lang: str) -> str:
+    """Run conservative spell/OCR correction over `text`. Walks token by token,
+    tracking sentence starts for capitalisation, and rebuilds the string with
+    every non-word character (spaces, punctuation) preserved exactly."""
+    if _get_speller(lang) is None:
+        return text
+    out: list[str] = []
+    pos = 0
+    at_sentence_start = True
+    for m in _TOKEN_RE.finditer(text):
+        gap = text[pos:m.start()]
+        if gap:
+            out.append(gap)
+            stripped = gap.rstrip()
+            if stripped and stripped[-1] in _SENTENCE_END:
+                at_sentence_start = True
+            elif gap.strip():
+                at_sentence_start = False
+        tok = m.group(0)
+        corrected = _correct_token(tok, lang)
+        out.append(_restore_case(tok, corrected, at_sentence_start))
+        at_sentence_start = False
+        pos = m.end()
+    out.append(text[pos:])
+    return "".join(out)
+
+
 def _preprocess_source(text: str, src: str) -> str:
     """Clean OCR/PDF artefacts out of the source text before it reaches the
-    MT model. Whitespace is always normalised; glued-word splitting only runs
-    for English source (wordninja is English-only)."""
+    MT model: whitespace is always normalised; glued English words are split
+    back apart (wordninja, English-only); then a conservative spell/OCR pass
+    fixes single-character misreads for any language pyspellchecker covers,
+    leaving acronyms, codes and unknown technical terms untouched."""
     text = re.sub(r"\s+", " ", text).strip()
     if src == "en":
         text = _WORD_RE.sub(lambda m: _split_glued_word(m.group(0)), text)
+    text = _spell_correct(text, src)
     return text
 
 

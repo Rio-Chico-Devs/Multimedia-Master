@@ -65,6 +65,7 @@ _THIRD_PARTY = [
     "ctranslate2",
     "sentencepiece",
     "wordninja",
+    "spellchecker",
     "rapidocr_onnxruntime",
     "onnxruntime",
     "cv2",
