@@ -171,6 +171,104 @@ def _join_lines(texts: list[str]) -> str:
     return out
 
 
+def _projection_gaps(intervals: list[tuple[float, float]], min_gap: float):
+    """Largest *interior* gap in a 1-D projection. `intervals` are (start, end)
+    spans on one axis; merge them and return the midpoint of the widest empty
+    band *between* two merged spans that is at least `min_gap` wide, else None.
+
+    A gap on the x-axis is a full-height blank column (a column gutter); a gap
+    on the y-axis is a full-width blank row (the band between a heading and the
+    body, or two stacked blocks). Exterior margins never count — only gaps
+    between two occupied spans — so a wide page margin can't be mistaken for a
+    column boundary."""
+    if len(intervals) < 2:
+        return None
+    ivs = sorted(intervals)
+    merged = [list(ivs[0])]
+    for a, b in ivs[1:]:
+        if a <= merged[-1][1]:
+            if b > merged[-1][1]:
+                merged[-1][1] = b
+        else:
+            merged.append([a, b])
+    best_mid = None
+    best_w = min_gap
+    for (_, end), (start, _) in zip(merged, merged[1:]):
+        w = start - end
+        if w > best_w:
+            best_w = w
+            best_mid = (end + start) / 2.0
+    return best_mid
+
+
+def _layout_regions(lines: list[dict], ref_h: float):
+    """Recursive XY-cut (Nagy & Seth) layout analysis. Split a set of lines at
+    its widest blank gutter — vertical (columns: left before right) or
+    horizontal (stacked bands: top before bottom) — and recurse. A full-width
+    heading covers the centre, so it blocks any vertical gutter and is peeled
+    off as the top band *before* the body columns are split — which is exactly
+    the order a person reads. Returns (regions, had_vertical_cut): regions is a
+    reading-ordered list of line-lists; had_vertical_cut says whether a column
+    split happened anywhere (so the caller knows the page was multi-column)."""
+    if len(lines) <= 1:
+        return [lines], False
+    # A column gutter must be clearly wider than a word space; a row gutter at
+    # least a blank line. Normal line spacing within a paragraph is well below
+    # these, so paragraph assembly stays the job of _group_into_paragraphs.
+    x_cut = _projection_gaps(
+        [(li["bbox"][0], li["bbox"][2]) for li in lines], 1.5 * ref_h)
+    y_cut = _projection_gaps(
+        [(li["bbox"][1], li["bbox"][3]) for li in lines], 1.2 * ref_h)
+    # Prefer the vertical (column) split: it is the structural boundary that,
+    # left unhandled, interleaves the columns. Only when no column gutter
+    # exists do we fall back to a horizontal band split.
+    if x_cut is not None:
+        def cx(li):
+            return (li["bbox"][0] + li["bbox"][2]) / 2.0
+        left = [li for li in lines if cx(li) < x_cut]
+        right = [li for li in lines if cx(li) >= x_cut]
+        lr, _ = _layout_regions(left, ref_h)
+        rr, _ = _layout_regions(right, ref_h)
+        return lr + rr, True
+    if y_cut is not None:
+        def cy(li):
+            return (li["bbox"][1] + li["bbox"][3]) / 2.0
+        top = [li for li in lines if cy(li) < y_cut]
+        bottom = [li for li in lines if cy(li) >= y_cut]
+        tr, tv = _layout_regions(top, ref_h)
+        br, bv = _layout_regions(bottom, ref_h)
+        return tr + br, (tv or bv)
+    # Leaf: no significant gutter — order what's left top-to-bottom, left-to-right.
+    return [sorted(lines, key=lambda li: (li["bbox"][1], li["bbox"][0]))], False
+
+
+def _order_multicolumn(lines: list[dict]) -> list[dict]:
+    """If the page is multi-column, reorder the lines into human reading order
+    and tag each with a region id (written to "block") so paragraph grouping
+    won't fuse lines across a column boundary. Single-column pages are returned
+    unchanged so the existing, well-tuned path stays in charge there.
+
+    This is the fix for two-column manuals (digital PDFs whose own blocks span
+    both columns, and OCR lines which carry no block at all): without it lines
+    sort by y across the whole page width, interleaving the columns, which both
+    scrambles the reading order and stops paragraphs ever reassembling — every
+    line ends up its own fragment and the MT model only ever sees half-sentences."""
+    if len(lines) < 2:
+        return lines
+    heights = sorted(max(li["bbox"][3] - li["bbox"][1], 1.0) for li in lines)
+    ref_h = heights[len(heights) // 2]
+    regions, had_columns = _layout_regions(lines, ref_h)
+    if not had_columns:
+        return lines
+    ordered: list[dict] = []
+    for region_id, region in enumerate(regions):
+        for li in region:
+            tagged = dict(li)
+            tagged["block"] = region_id
+            ordered.append(tagged)
+    return ordered
+
+
 def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
     """
     Merge consecutive lines that visually belong to the same paragraph
@@ -290,7 +388,7 @@ def extract_sections(
                 elif include_scanned:
                     ocr_needed_missing += 1
 
-            for p in _group_into_paragraphs(lines):
+            for p in _group_into_paragraphs(_order_multicolumn(lines)):
                 p["page"] = i
                 sections.append(p)
 
