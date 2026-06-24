@@ -7,7 +7,7 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 **Legenda esito:** ✅ ok · ⚠️ funziona con riserve · ❌ rotto · ⏭️ saltato (dip. opzionale assente)
 
 **Dipendenze opzionali** (i test relativi sono ⏭️ se assenti, non ❌):
-`pymupdf` (editor PDF) · `rapidocr-onnxruntime` (OCR) · `demucs` + PyTorch (separazione stem) · `tkinterdnd2` (drag & drop) · `argostranslate` (traduzione PDF, + download lingue al primo uso) · `wordninja` (de-incollaggio parole OCR prima della traduzione)
+`pymupdf` (editor PDF) · `rapidocr-onnxruntime` (OCR) · `demucs` + PyTorch (separazione stem) · `tkinterdnd2` (drag & drop) · `argostranslate` (traduzione PDF, + download lingue al primo uso) · `wordninja` (de-incollaggio parole OCR prima della traduzione) · `pyspellchecker` (correzione refusi OCR a un carattere) · `transformers`+`torch` (motori traduzione NLLB-200 / mBART-50, modello ~2.4 GB scaricato al primo uso)
 
 **Setup ambiente:** eseguire `setup.bat` (Windows) una volta — crea `venv` e installa tutto (core + opzionali + PyInstaller). Poi `build.bat` attiva il venv da solo.
 
@@ -108,6 +108,10 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | P27 | Revisione manuale — editing testo estratto | Spuntare "Revisione manuale", correggere il testo di una sezione nella prima finestra prima di continuare | La traduzione successiva usa il testo corretto, non quello estratto originariamente | ☐ |
 | P28 | Revisione manuale — editing traduzione | Spuntare "Revisione manuale", correggere il testo tradotto nella seconda finestra di revisione | Il PDF finale contiene il testo corretto a mano, non quello prodotto dal motore MT | ☐ |
 | P29 | Revisione manuale — annulla a metà | Spuntare "Revisione manuale", premere "Annulla traduzione" in una delle due finestre di revisione | Nessun PDF viene generato, stato torna a pronto | ☐ |
+| P30 | Motore NLLB-200 — selezione | Selezionare "NLLB-200" nel menu Motore | Le lingue compaiono subito (tabella statica, **nessun** download avviato); "Gestisci lingue" disabilitato; nota sul modello ~2.4 GB | ☐ |
+| P31 | Motore NLLB-200 — traduzione | Con transformers+torch installati, tradurre un PDF (en→it) con NLLB-200 | Modello scaricato una volta al primo uso, poi offline; traduzione più naturale/contestuale di Argos; paragrafi lunghi non troncati | ☐ |
+| P32 | Motore assente | Selezionare NLLB-200 o mBART-50 senza transformers/torch installati | Messaggio "non disponibile" con hint pip, nessun crash, nessuna lingua elencata (⏭️) | ☐ |
+| P33 | Correzione OCR | Tradurre/estrarre testo OCR con refusi a un carattere (es. "1n") con revisione manuale | Nella finestra di revisione "1n" appare già corretto in "In"; sigle/codici (BCS, 12V) restano invariati (⏭️ se manca pyspellchecker) | ☐ |
 
 ---
 

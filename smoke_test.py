@@ -49,7 +49,7 @@ def check_versions() -> None:
         "pypdf":  "6.13.3",   # security floor
     }
     optional = ["argostranslate", "stanza", "ctranslate2", "wordninja",
-                "pymupdf", "rapidocr-onnxruntime"]
+                "pyspellchecker", "pymupdf", "rapidocr-onnxruntime"]
     for pkg, floor in wanted.items():
         try:
             v = md.version(pkg)
@@ -211,6 +211,27 @@ def check_translation_cleanup() -> None:
                     "word de-gluing (a/i)", f"Apusherhasthepower -> {out2}")
     except Exception as exc:
         _record("FAIL", "word de-gluing", str(exc))
+
+    try:
+        from core.translate_engine import _get_speller, _preprocess_source
+        if _get_speller("en") is None:
+            _record("SKIP", "OCR spell correction", "pyspellchecker not installed")
+        else:
+            out = _preprocess_source("1n the meantime your BCS warranty", "en")
+            ok = "in the meantime" in out.lower() and "BCS" in out
+            _record("PASS" if ok else "FAIL", "OCR spell correction",
+                    f"1n ... BCS -> {out!r}")
+    except Exception as exc:
+        _record("FAIL", "OCR spell correction", str(exc))
+
+    try:
+        from core import nllb_engine
+        codes = nllb_engine.language_codes()
+        ok = codes.get("it") == "ita_Latn" and codes.get("en") == "eng_Latn"
+        _record("PASS" if ok else "FAIL", "NLLB language table",
+                f"{len(codes)} languages, it={codes.get('it')}")
+    except Exception as exc:
+        _record("FAIL", "NLLB language table", str(exc))
 
 
 def main() -> int:

@@ -24,12 +24,27 @@ from core.pdf_translator_engine import (
 )
 from core import translate_engine as te
 from core import mbart_engine as me
+from core import nllb_engine as ne
 from core.glossary_presets import AGRICULTURAL_EN_IT
 
 _GLOSSARY_KEY = "translate_glossary"
 _ENGINE_LABELS = {
     "argos": "Argos Translate (predefinito, veloce)",
-    "mbart": "mBART-50 (modello più ampio, più lento, sperimentale)",
+    "nllb":  "NLLB-200 (qualità migliore, più lento)",
+    "mbart": "mBART-50 (modello ampio, più lento, sperimentale)",
+}
+# The "heavy" engines: one large multilingual model each (downloaded once),
+# their own language tables, and no argostranslate language packages — so the
+# "Gestisci lingue" button is irrelevant for them. Maps engine key -> the
+# module exposing available()/language_codes()/display_name().
+_MODEL_ENGINES = {"nllb": ne, "mbart": me}
+_MODEL_NOTES = {
+    "nllb": "Il modello (~2.4 GB) viene scaricato una sola volta al primo "
+            "utilizzo; da quel momento la traduzione resta sempre offline, "
+            "anche se Hugging Face non è raggiungibile.",
+    "mbart": "Il modello (~2.3 GB) viene scaricato una sola volta al primo "
+             "utilizzo; da quel momento la traduzione resta sempre offline, "
+             "anche se Hugging Face non è raggiungibile.",
 }
 
 
@@ -305,7 +320,7 @@ class TranslateTab(ctk.CTkFrame):
         self._pairs:      list = []
         self._src_labels: dict = {}
         self._tgt_labels: dict = {}
-        self._mbart_codes: dict = {}
+        self._model_codes: dict = {}
         self._mt_engine:  str = "argos"
         self._indeterminate = False
         self._reporter = _ProgressReporter(self)
@@ -457,9 +472,10 @@ class TranslateTab(ctk.CTkFrame):
 
     def _on_src_change(self, _label: str) -> None:
         src_code = self._src_labels.get(self._src_var.get())
-        if self._mt_engine == "mbart":
-            targets = sorted((c, me.display_name(c))
-                              for c in self._mbart_codes if c != src_code)
+        mod = _MODEL_ENGINES.get(self._mt_engine)
+        if mod is not None:
+            targets = sorted((c, mod.display_name(c))
+                              for c in self._model_codes if c != src_code)
         else:
             targets = sorted({(t, tn) for f, _, t, tn in self._pairs if f == src_code},
                              key=lambda x: x[1])
@@ -477,46 +493,61 @@ class TranslateTab(ctk.CTkFrame):
     # ── Engine selection ───────────────────────────────────────────────────
 
     def _on_engine_change(self, label: str) -> None:
-        self._mt_engine = "mbart" if label == _ENGINE_LABELS["mbart"] else "argos"
-        self._manage_lang_btn.configure(
-            state="disabled" if self._mt_engine == "mbart" else "normal")
-        if self._mt_engine == "mbart":
-            self._engine_note.configure(
-                text="Il modello (~2.3 GB) viene scaricato una sola volta al "
-                     "primo utilizzo; da quel momento la traduzione resta "
-                     "sempre offline, anche se Hugging Face non è raggiungibile.")
+        self._mt_engine = next(
+            (k for k, v in _ENGINE_LABELS.items() if v == label), "argos")
+        is_model = self._mt_engine in _MODEL_ENGINES
+        # argostranslate uses downloadable language packages; the big-model
+        # engines carry their own languages, so "Gestisci lingue" is irrelevant.
+        self._manage_lang_btn.configure(state="disabled" if is_model else "normal")
+        if is_model:
+            self._engine_note.configure(text=_MODEL_NOTES.get(self._mt_engine, ""))
             self._no_lang_lbl.configure(text="")
-            self._status.busy("Carico le lingue di mBART-50…")
-            threading.Thread(target=self._worker_load_mbart_langs, daemon=True).start()
+            name = _ENGINE_LABELS[self._mt_engine].split(" (")[0]
+            self._status.busy(f"Carico le lingue di {name}…")
+            engine = self._mt_engine
+            threading.Thread(target=self._worker_load_model_langs,
+                             args=(engine,), daemon=True).start()
         else:
             self._engine_note.configure(text="")
             self._refresh_languages()
 
-    def _worker_load_mbart_langs(self) -> None:
+    def _worker_load_model_langs(self, engine: str) -> None:
+        mod = _MODEL_ENGINES[engine]
         try:
-            codes = me.language_codes()
-            self.after(0, self._mbart_langs_loaded, codes, None)
+            # available() checks only that the heavy deps import — it never
+            # loads the model, so for NLLB (static language table) selecting the
+            # engine costs nothing; the multi-GB download waits for the first
+            # real translation.
+            codes = mod.language_codes() if mod.available() else {}
+            self.after(0, self._model_langs_loaded, engine, codes, None)
         except Exception as exc:
-            self.after(0, self._mbart_langs_loaded, {}, str(exc))
+            self.after(0, self._model_langs_loaded, engine, {}, str(exc))
 
-    def _mbart_langs_loaded(self, codes: dict, error: str | None) -> None:
+    def _model_langs_loaded(self, engine: str, codes: dict,
+                            error: str | None) -> None:
+        # The user may have switched engines again before this worker returned;
+        # ignore a stale result so it can't clobber the current selection.
+        if engine != self._mt_engine:
+            return
+        name = _ENGINE_LABELS[engine].split(" (")[0]
         if error or not codes:
             from common.depmsg import pip_hint
             self._no_lang_lbl.configure(
-                text="mBART-50 non disponibile — "
+                text=f"{name} non disponibile — "
                      f"{pip_hint('transformers torch sentencepiece')}")
             self._src_menu.configure(values=["—"])
             self._tgt_menu.configure(values=["—"])
             self._src_var.set("—")
             self._tgt_var.set("—")
-            self._status.err("mBART-50 non disponibile." + (f" {error}" if error else ""))
+            self._status.err(f"{name} non disponibile." + (f" {error}" if error else ""))
             return
-        self._mbart_codes = codes
-        self._src_labels = {f"{me.display_name(c)} ({c})": c for c in codes}
+        mod = _MODEL_ENGINES[engine]
+        self._model_codes = codes
+        self._src_labels = {f"{mod.display_name(c)} ({c})": c for c in codes}
         self._src_menu.configure(values=list(self._src_labels.keys()))
         self._src_var.set(next(iter(self._src_labels)))
         self._on_src_change(self._src_var.get())
-        self._status.ok(f"{len(codes)} lingue disponibili con mBART-50")
+        self._status.ok(f"{len(codes)} lingue disponibili con {name}")
 
     # ── File / dir ─────────────────────────────────────────────────────────
 
@@ -594,7 +625,9 @@ class TranslateTab(ctk.CTkFrame):
         """A short up-front heads-up when the job is likely to be heavy, so a
         long wait is expected rather than mistaken for a hang."""
         notes = []
-        if engine == "mbart":
+        if engine == "nllb":
+            notes.append("modello ampio (~2.4 GB al primo avvio), più lento")
+        elif engine == "mbart":
             notes.append("modello ampio (~2.3 GB al primo avvio), più lento")
         if include_scanned:
             notes.append("OCR pagine scansionate può richiedere tempo")

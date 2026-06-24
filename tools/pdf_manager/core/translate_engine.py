@@ -33,10 +33,12 @@ Language packages must be downloaded once (requires internet — see
 list_downloadable_pairs()/install_pair()); translation itself never touches
 the network afterwards.
 
-Alternative engine: translate_text(..., engine="mbart") routes through
-mbart_engine.py (facebook/mbart-large-50-many-to-many-mmt) instead — one
-larger general-purpose multilingual model rather than many small per-pair
-ones. Same offline guarantee, heavier dependency, slower per paragraph.
+Alternative engines: translate_text(..., engine="nllb") routes through
+nllb_engine.py (facebook/nllb-200-distilled-600M) and engine="mbart" through
+mbart_engine.py (facebook/mbart-large-50-many-to-many-mmt) instead — one larger
+general-purpose multilingual model rather than many small per-pair ones, for
+more natural, less literal translations. Same offline guarantee, heavier
+dependency (transformers + torch), slower per paragraph.
 """
 from __future__ import annotations
 
@@ -359,8 +361,9 @@ def translate_text(text: str, src: str, tgt: str,
                     glossary: dict[str, str] | None = None,
                     engine: str = "argos") -> str:
     """Translate one chunk of text (line/paragraph), honouring an optional
-    glossary. `engine` is "argos" (default, small per-pair models) or
-    "mbart" (facebook/mbart-large-50-many-to-many-mmt, see mbart_engine.py)."""
+    glossary. `engine` is "argos" (default, small per-pair models),
+    "mbart" (facebook/mbart-large-50-many-to-many-mmt, see mbart_engine.py) or
+    "nllb" (facebook/nllb-200-distilled-600M, see nllb_engine.py)."""
     if not text.strip():
         return text
 
@@ -370,6 +373,9 @@ def translate_text(text: str, src: str, tgt: str,
         if engine == "mbart":
             from . import mbart_engine
             return mbart_engine.translate(chunk, src, tgt)
+        if engine == "nllb":
+            from . import nllb_engine
+            return nllb_engine.translate(chunk, src, tgt)
         _require_argos()
         import argostranslate.translate as at
         return at.translate(chunk, src, tgt)
