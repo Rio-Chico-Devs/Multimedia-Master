@@ -207,6 +207,18 @@ def _preprocess_source(text: str, src: str) -> str:
     return text
 
 
+def clean_extracted_text(text: str, src: str) -> str:
+    """Public entry point for the same OCR/PDF artefact cleanup translate_text()
+    applies automatically. extract_sections() calls this so the pre-translation
+    review screen already shows de-glued text — not just the final translation —
+    since that screen is the user's only chance to fix garbled OCR before it
+    gets baked into the document. Re-running it later inside translate_text() on
+    already-cleaned text is harmless: whitespace squeezing is idempotent, and a
+    token that already split correctly is left whole (it has no more glue to
+    find)."""
+    return _preprocess_source(text, src)
+
+
 def _protect_glossary(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
     tokens: dict[str, str] = {}
     protected = text

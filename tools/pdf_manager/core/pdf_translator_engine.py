@@ -37,7 +37,7 @@ from typing import Callable
 
 from common.depmsg import pip_hint
 from common.ocr_engine import ocr_available, ocr_image
-from .translate_engine import translate_text
+from .translate_engine import clean_extracted_text, translate_text
 
 _MIN_FONT_SIZE = 5.0
 _OCR_DPI       = 200
@@ -269,7 +269,7 @@ def _order_multicolumn(lines: list[dict]) -> list[dict]:
     return ordered
 
 
-def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
+def _group_into_paragraphs(lines: list[dict], src: str | None = None) -> list[dict]:
     """
     Merge consecutive lines that visually belong to the same paragraph
     (small vertical gap, similar left edge, similar font size) into one
@@ -282,6 +282,12 @@ def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
     glued to the body line under it would both poison the translation and
     break the paragraph chain, leaving the rest of the body as orphaned
     fragments — which is exactly how scanned pages ended up half-translated.
+
+    `src`, when known, runs the same OCR-glued-word cleanup translate_text()
+    applies, but here — before the paragraph is ever shown on the manual-
+    review screen, not just before translation. Without this, a two-column
+    scanned page survives the reading-order fix only to show the user
+    "earnedforyou.Webelieve" instead of "earned for you. We believe".
     """
     if not lines:
         return []
@@ -332,10 +338,13 @@ def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
         x1 = max(g["bbox"][2] for g in group)
         y1 = max(g["bbox"][3] for g in group)
         dominant = max(group, key=lambda g: len(g["text"]))
+        text = _join_lines([g["text"] for g in group])
+        if src is not None:
+            text = clean_extracted_text(text, src)
         paragraphs.append({
             "line_rects": [g["bbox"] for g in group],
             "bbox":       (x0, y0, x1, y1),
-            "text":       _join_lines([g["text"] for g in group]),
+            "text":       text,
             "size":       dominant["size"],
             "color":      dominant["color"],
             "font":       dominant["font"],
@@ -347,6 +356,7 @@ def _group_into_paragraphs(lines: list[dict]) -> list[dict]:
 def extract_sections(
     input_path:       Path,
     include_scanned:  bool = True,
+    src:              str | None = None,
     cancel_event=None,
     progress_cb:      Callable[[float], None] | None = None,
 ) -> ExtractResult:
@@ -354,7 +364,12 @@ def extract_sections(
     section is a dict (see _group_into_paragraphs) plus a "page" index and a
     "removed" flag a caller can flip before translate_sections()/
     apply_translation() to drop a section instead of translating/burning it
-    in — the original PDF content there is left exactly as-is."""
+    in — the original PDF content there is left exactly as-is.
+
+    `src`, when given, runs the OCR-glued-word cleanup (see
+    translate_engine.clean_extracted_text) on each paragraph's text as it's
+    built, so a manual-review screen shown right after extraction — before any
+    translation — already displays cleaned-up text instead of raw OCR glue."""
     import fitz  # pymupdf
 
     doc = fitz.open(str(input_path))
@@ -388,7 +403,7 @@ def extract_sections(
                 elif include_scanned:
                     ocr_needed_missing += 1
 
-            for p in _group_into_paragraphs(_order_multicolumn(lines)):
+            for p in _group_into_paragraphs(_order_multicolumn(lines), src):
                 p["page"] = i
                 sections.append(p)
 
@@ -560,7 +575,7 @@ class PdfTranslatorEngine:
 
         try:
             extracted = extract_sections(
-                input_path, include_scanned=include_scanned,
+                input_path, include_scanned=include_scanned, src=src,
                 cancel_event=cancel_event, progress_cb=_scaled(0.0, 0.4))
         except Exception as exc:
             return PdfResult(output=output_path, success=False, error=str(exc))

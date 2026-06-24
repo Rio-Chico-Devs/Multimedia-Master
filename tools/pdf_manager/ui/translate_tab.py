@@ -616,7 +616,7 @@ class TranslateTab(ctk.CTkFrame):
     def _worker_extract(self, job: dict) -> None:
         try:
             extracted = extract_sections(
-                job["pdf"], include_scanned=job["include_scanned"],
+                job["pdf"], include_scanned=job["include_scanned"], src=job["src"],
                 cancel_event=self._cancel_event,
                 progress_cb=self._reporter.update)
         except Exception as exc:
