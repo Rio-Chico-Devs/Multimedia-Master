@@ -138,6 +138,16 @@ class MergeTab(ctk.CTkFrame):
         ).start()
 
     def _worker(self, pdfs, output):
+        # Safety: never let the merged output overwrite one of its own
+        # source files (happens when the output directory matches a
+        # source file's directory and the chosen name matches one of them).
+        out_resolved = output.resolve()
+        if any(out_resolved == p.resolve() for p in pdfs):
+            self.after(0, self._done_err,
+                       "Il nome/cartella di destinazione coincide con uno "
+                       "dei PDF da unire: l'operazione è stata annullata "
+                       "per non sovrascrivere un file di origine.")
+            return
         try:
             result = self._engine.merge(pdfs, output)
             if result.success:

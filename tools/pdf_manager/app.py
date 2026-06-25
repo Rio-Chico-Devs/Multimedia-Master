@@ -8,8 +8,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Crash logging FIRST — on Windows the tool has no console, so without
 # this every exception (incl. C-extension crashes) is silently lost.
-from common.crashlog import install as _install_crashlog
-_install_crashlog(Path(__file__).parent / "crash.log")
+from common.crashlog import install as _install_crashlog, run_gui as _run_gui
+from common.paths import crash_log_path
+_install_crashlog(crash_log_path("pdf_manager"))
+
+# Frozen-build hardening: dependencies that shell out (e.g. pydub -> ffmpeg)
+# without setting stdin hang forever (not crash) in a windowed build with no
+# console.
+from common.proc import harden_subprocess_stdin as _harden_stdin
+_harden_stdin()
 
 import customtkinter as ctk
 from ui.pdf_window import PdfWindow
@@ -18,5 +25,4 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
 if __name__ == "__main__":
-    app = PdfWindow()
-    app.mainloop()
+    _run_gui(PdfWindow, "Gestione PDF")

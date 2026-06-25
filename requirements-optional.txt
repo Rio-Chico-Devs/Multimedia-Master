@@ -1,0 +1,60 @@
+# Optional, heavier features — installed by setup.bat / setup.sh.
+# Kept out of requirements.txt so a minimal build (no OCR, no translation)
+# stays light. The app runs without these: each feature degrades gracefully
+# with a "pip install ..." hint instead of crashing.
+
+# ── OCR — searchable PDF + scanned-page text for the Translate tab ────────────
+#    Pure pip, no separate native installer: the base (Chinese+English) model
+#    ships inside the wheel. For accurate Italian/French/German/Spanish
+#    recognition, vendor the "latin" model once (see vendor/rapidocr/README.md).
+rapidocr-onnxruntime>=1.3.0,<2
+
+# ── PDF translation — offline neural MT ───────────────────────────────────────
+#    Language packages are downloaded once from "Gestisci lingue" (needs
+#    internet that one time); translation itself never goes online afterwards.
+argostranslate>=1.11.0,<2
+#    argostranslate 1.11.0 (the latest release as of writing) hard-pins
+#    stanza==1.10.1, which pip-audit flags for CVE-2026-54499 (RCE via a
+#    malicious .pt pickle file loaded through stanza's model loader). There is
+#    no newer argostranslate release that lifts this pin, and forcing a newer
+#    stanza ourselves makes pip's resolver backtrack argostranslate to old
+#    1.9.x (regressing translation quality — verified, don't do this).
+#    Accepted residual risk: stanza is only ever fed argostranslate's own
+#    package-manager-installed tokenizer models from the trusted argosopentech
+#    index, never a user-supplied file, so this app has no code path that
+#    reaches the vulnerable loader with untrusted input. Re-check with
+#    `pip-audit` after every argostranslate upgrade in case upstream lifts it.
+
+# ── Translation source cleanup ────────────────────────────────────────────────
+#    Splits OCR-glued English words ("POWERUNITS" -> "POWER UNITS") before
+#    translation. MIT-licensed, fully offline, ships its own word list.
+wordninja>=2.0.0,<3
+#    Conservative OCR spell correction: fixes single-character misreads
+#    ("1n" -> "in") before the text reaches the review screen and the MT model.
+#    Ships frequency dictionaries for en/it/fr/de/es/pt/nl/ru/ar (fully offline,
+#    MIT-licensed). Only corrects genuinely-unknown words within edit distance 1
+#    and never touches acronyms, part numbers or codes, so technical manuals
+#    survive intact. Graceful no-op if absent.
+pyspellchecker>=0.8.0,<1
+
+# ── PDF translation — higher-quality engines (NLLB-200 / mBART-50) ────────────
+#    Optional, heavier alternatives to argostranslate: one large multilingual
+#    model instead of many small per-pair ones, for more natural, less literal
+#    translations. Both run through transformers + torch and share these deps:
+#
+#      * NLLB-200 distilled-600M (facebook/nllb-200-distilled-600M) — Meta's
+#        "No Language Left Behind". Code MIT, weights CC-BY-NC-4.0. Generally
+#        the best quality of the three on European pairs. ~2.4 GB.
+#        See tools/pdf_manager/core/nllb_engine.py.
+#      * mBART-50 (facebook/mbart-large-50-many-to-many-mmt) — MIT (fairseq).
+#        ~2.3 GB. See tools/pdf_manager/core/mbart_engine.py.
+#
+#    Each model is downloaded once from the Hugging Face Hub on first use and
+#    cached locally; every call after that runs with local_files_only=True, so
+#    this never touches the network again — even if Hugging Face is
+#    unreachable. Not installed by default: pulls in torch (CPU build, still a
+#    large download) on top of transformers, and inference is noticeably slower
+#    per paragraph than argostranslate. Skip this block for the default engine.
+transformers>=4.30,<5
+sentencepiece>=0.1.99,<1
+torch>=2.0,<3

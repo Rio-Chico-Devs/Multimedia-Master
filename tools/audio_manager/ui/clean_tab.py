@@ -19,7 +19,7 @@ import customtkinter as ctk
 
 from common.ui.widgets import (SectionLabel, Separator, StatusBar,
                                adaptive_wraplength)
-from core.audio_engine import AudioEngine
+from core.audio_engine import AudioEngine, AudioResult
 
 
 _BTN_INACTIVE = "#2a2a2a"
@@ -301,10 +301,13 @@ class CleanTab(ctk.CTkFrame):
 
             self.after(0, lambda l=lbl: l.configure(
                 text="⏳", text_color="#aaa"))
-            result = self._engine.clean_voice(
-                src=path, output=output,
-                preset=preset, mp3_q=mp3_q, to_mono=to_mono,
-            )
+            try:
+                result = self._engine.clean_voice(
+                    src=path, output=output,
+                    preset=preset, mp3_q=mp3_q, to_mono=to_mono,
+                )
+            except Exception as exc:
+                result = AudioResult(output=None, success=False, error=str(exc))
             if result.success:
                 ok += 1
                 self.after(0, lambda l=lbl: l.configure(

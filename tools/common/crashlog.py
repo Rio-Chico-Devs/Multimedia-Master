@@ -30,36 +30,58 @@ def _write(header: str, text: str) -> None:
 
 
 class _TeeStream:
-    """Mirror writes to the real stream AND the crash log."""
+    """
+    Mirror writes to the real stream AND the crash log.
 
-    def __init__(self, real):
+    On Windows, a windowed (console=False) build has sys.stdout AND
+    sys.stderr set to None by the PyInstaller bootloader — any code or
+    third-party library that calls .write()/.isatty()/.fileno() on them
+    without a None-check crashes the whole process. Wrapping both streams
+    here (not just stderr) means that crash can't happen, and isatty()/
+    fileno() answer the way a library would expect from "no real terminal"
+    instead of raising AttributeError.
+    """
+
+    def __init__(self, real, label: str):
         self._real = real
+        self._label = label
 
     def write(self, s: str) -> None:
-        try:
-            self._real.write(s)
-            self._real.flush()
-        except Exception:
-            pass
+        if self._real is not None:
+            try:
+                self._real.write(s)
+                self._real.flush()
+            except Exception:
+                pass
         if s.strip():
-            _write("STDERR", s)
+            _write(self._label, s)
 
     def flush(self) -> None:
-        try:
-            self._real.flush()
-        except Exception:
-            pass
+        if self._real is not None:
+            try:
+                self._real.flush()
+            except Exception:
+                pass
+
+    def isatty(self) -> bool:
+        return False
 
     def fileno(self):
-        return self._real.fileno()
+        if self._real is not None:
+            try:
+                return self._real.fileno()
+            except Exception:
+                pass
+        raise OSError("no underlying stream (windowed build has none)")
 
 
 def install(log_path: Path) -> None:
-    """Wire up stderr tee + main/thread exception hooks."""
+    """Wire up stdout/stderr tee + main/thread exception hooks."""
     global _log_path
     _log_path = log_path
 
-    sys.stderr = _TeeStream(sys.stderr)
+    sys.stdout = _TeeStream(sys.stdout, "STDOUT")
+    sys.stderr = _TeeStream(sys.stderr, "STDERR")
 
     def _main_hook(exc_type, exc_value, exc_tb):
         _write("UNCAUGHT EXCEPTION (main thread)",
@@ -75,9 +97,52 @@ def install(log_path: Path) -> None:
 
     threading.excepthook = _thread_hook
 
+    # Tkinter never routes callback exceptions (button commands, bindings,
+    # `after()` callbacks) through sys.excepthook — Tk's mainloop catches
+    # them itself and calls Tk.report_callback_exception, which by default
+    # just prints to stderr and keeps the app "running" in a half-broken
+    # state (e.g. a status label stuck on "in corso…" forever). Override it
+    # globally so those exceptions reach the log exactly like any other.
+    import tkinter
+    def _tk_callback_hook(exc_type, exc_value, exc_tb) -> None:
+        _write("UNCAUGHT EXCEPTION (Tk callback)",
+               "".join(traceback.format_exception(exc_type, exc_value, exc_tb)))
+    tkinter.Tk.report_callback_exception = staticmethod(_tk_callback_hook)
+
     _write("STARTUP", f"Python {sys.version}\nCWD: {Path.cwd()}")
 
 
 def log(header: str, text: str = "") -> None:
     """Manual checkpoint logging for debugging."""
     _write(header, text)
+
+
+def run_gui(factory, tool_label: str) -> None:
+    """
+    Build and run a CTk app, turning any fatal startup/mainloop crash into a
+    logged entry + a visible error dialog instead of a window that silently
+    vanishes. `factory` is a zero-arg callable returning the root window.
+
+    Re-raises after reporting, so the process still exits non-zero (the
+    launcher uses that to flag the failure too).
+    """
+    try:
+        app = factory()
+        app.mainloop()
+    except Exception:
+        tb = traceback.format_exc()
+        _write(f"FATAL — {tool_label} crashed", tb)
+        try:
+            from tkinter import Tk, messagebox
+            # The crashing app's root may be unusable; use a throwaway root.
+            _root = Tk()
+            _root.withdraw()
+            messagebox.showerror(
+                f"{tool_label} — errore irreversibile",
+                "Si è verificato un errore e lo strumento deve chiudersi.\n\n"
+                f"Dettagli salvati in:\n{_log_path}",
+            )
+            _root.destroy()
+        except Exception:
+            pass
+        raise

@@ -19,6 +19,7 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, StatusBar, adaptive_wraplength
+from common.depmsg import pip_hint
 from core.audio_engine import AudioEngine, AudioInfo, safe_tempfile, VOICE_EFFECTS
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS, AUDIO_FORMATS
@@ -366,7 +367,7 @@ class EditTab(ctk.CTkFrame):
         if not eq_ok:
             ctk.CTkLabel(
                 body,
-                text="⚠  Richiede: pip install soundfile scipy numpy",
+                text=f"⚠  {pip_hint('soundfile scipy numpy')}",
                 text_color="#f44336", font=ctk.CTkFont(size=10),
             ).pack(anchor="w", pady=(0, 6))
         else:
@@ -558,9 +559,13 @@ class EditTab(ctk.CTkFrame):
         ).start()
 
     def _load_waveform(self, path: Path) -> None:
-        info = self._engine.probe(path)
+        try:
+            info = self._engine.probe(path)
+            pos, neg = self._engine.get_waveform_peaks(path, num_samples=900)
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
+            return
         self._info = info
-        pos, neg  = self._engine.get_waveform_peaks(path, num_samples=900)
         dur_ms    = int(info.duration_s * 1000)
 
         def _apply():
@@ -697,11 +702,17 @@ class EditTab(ctk.CTkFrame):
             import sounddevice as sd
             import numpy as np
         except ImportError:
-            self.after(0, self._status.err,
-                       "Installa sounddevice: pip install sounddevice")
+            self.after(0, self._status.err, pip_hint("sounddevice"))
             self.after(0, lambda: self._stop_playback_ui(gen))
             return
 
+        if not self._engine._ffmpeg:
+            self.after(0, self._status.err,
+                       f"ffmpeg mancante — {pip_hint('imageio-ffmpeg')}")
+            self.after(0, lambda: self._stop_playback_ui(gen))
+            return
+
+        from common.proc import NO_WINDOW
         try:
             logger.log("PLAY_WORKER start", str(path))
             tmp = safe_tempfile(suffix=".wav")
@@ -710,6 +721,7 @@ class EditTab(ctk.CTkFrame):
                  "-acodec", "pcm_s16le", "-ar", "44100", str(tmp)],
                 stdout=sp.DEVNULL, stderr=sp.PIPE,
                 encoding="utf-8", errors="replace",
+                **NO_WINDOW,
             )
             logger.log("PLAY_WORKER ffmpeg done", f"rc={proc.returncode}")
             if proc.returncode != 0 or tmp.stat().st_size == 0:
@@ -838,7 +850,14 @@ class EditTab(ctk.CTkFrame):
             import numpy as np
         except ImportError:
             self.after(0, lambda: self._preview_status_lbl.configure(
-                text="pip install sounddevice", text_color="#f44336"))
+                text=pip_hint("sounddevice"), text_color="#f44336"))
+            self.after(0, lambda: self._stop_preview_ui(gen))
+            return
+
+        if not self._engine._ffmpeg:
+            self.after(0, lambda: self._preview_status_lbl.configure(
+                text=f"ffmpeg mancante — {pip_hint('imageio-ffmpeg')}",
+                text_color="#f44336"))
             self.after(0, lambda: self._stop_preview_ui(gen))
             return
 
@@ -876,10 +895,11 @@ class EditTab(ctk.CTkFrame):
                 cmd += ["-af", ",".join(filters)]
             cmd += ["-ar", "44100", "-acodec", "pcm_s16le", str(tmp)]
 
+            from common.proc import NO_WINDOW
             logger.log("PREVIEW ffmpeg start",
                        f"filters={filters} cur={cur_s:.1f}s")
             proc = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE,
-                          encoding="utf-8", errors="replace")
+                          encoding="utf-8", errors="replace", **NO_WINDOW)
             logger.log("PREVIEW ffmpeg done", f"rc={proc.returncode}")
 
             if proc.returncode != 0 or not tmp.exists() or tmp.stat().st_size == 0:
@@ -957,7 +977,11 @@ class EditTab(ctk.CTkFrame):
         ).start()
 
     def _split_worker(self, src: Path, points: list[int]) -> None:
-        results = self._engine.split(src, src.parent, points)
+        try:
+            results = self._engine.split(src, src.parent, points)
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
+            return
         ok  = sum(1 for r in results if r.success)
         tot = len(results)
         if ok == tot:
@@ -1005,8 +1029,8 @@ class EditTab(ctk.CTkFrame):
     def _worker(self, src: Path, output: Path, fmt: str,
                 voice_effect: str = "none") -> None:
         import shutil
-        tmp_a   = safe_tempfile(suffix=src.suffix)
-        tmp_b   = safe_tempfile(suffix=src.suffix)
+        tmp_a   = None
+        tmp_b   = None
         current = src
         use_a   = True
 
@@ -1022,6 +1046,9 @@ class EditTab(ctk.CTkFrame):
             return True
 
         try:
+            tmp_a = safe_tempfile(suffix=src.suffix)
+            tmp_b = safe_tempfile(suffix=src.suffix)
+
             s_ms, e_ms = self._wf.get_trim_range()
             action     = self._sel_action_var.get()
 
@@ -1079,6 +1106,9 @@ class EditTab(ctk.CTkFrame):
                 shutil.copy2(str(current), str(output))
 
             self.after(0, self._status.ok, f"Salvato: {output.name}")
+
+        except Exception as exc:
+            self.after(0, self._status.err, str(exc))
 
         finally:
             for t in (tmp_a, tmp_b):

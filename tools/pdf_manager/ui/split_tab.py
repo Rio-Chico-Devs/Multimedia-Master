@@ -167,6 +167,17 @@ class SplitTab(ctk.CTkFrame):
         ).start()
 
     def _worker_ranges(self, pdf, ranges, out_dir):
+        # Safety: split filenames always carry a "_pagX-Y" suffix so they
+        # cannot literally collide with the source name — but guard anyway
+        # against a misconfigured destination that resolves to the source
+        # file itself (e.g. a destination "directory" that is actually the
+        # source file's own path).
+        if out_dir.resolve() == pdf.resolve():
+            self.after(0, self._split_done,
+                       "La cartella di destinazione coincide con il file PDF "
+                       "di origine: l'operazione è stata annullata.",
+                       self._status.err)
+            return
         try:
             results = self._engine.split_by_ranges(pdf, ranges, out_dir)
             ok   = [r for r in results if r.success]
@@ -209,6 +220,13 @@ class SplitTab(ctk.CTkFrame):
         ).start()
 
     def _worker_n(self, pdf, n, out_dir):
+        # Safety: same rationale as _worker_ranges above.
+        if out_dir.resolve() == pdf.resolve():
+            self.after(0, self._split_done,
+                       "La cartella di destinazione coincide con il file PDF "
+                       "di origine: l'operazione è stata annullata.",
+                       self._status.err)
+            return
         try:
             results = self._engine.split_every_n(pdf, n, out_dir)
             ok   = [r for r in results if r.success]

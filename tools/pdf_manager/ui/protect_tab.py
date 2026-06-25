@@ -231,6 +231,15 @@ class ProtectTab(ctk.CTkFrame):
 
     def _worker_encrypt(self, pdf, user_pw, owner_pw, output,
                         allow_print, allow_copy, strip_meta):
+        # Safety: never let the output overwrite the source file. Checked
+        # in the worker (not before the thread starts) so it always runs
+        # against the resolved paths actually handed to the engine.
+        if output.resolve() == pdf.resolve():
+            self.after(0, self._status.err,
+                       "Il file di destinazione coincide con il file di "
+                       "origine: l'operazione è stata annullata per non "
+                       "sovrascrivere il PDF originale.")
+            return
         try:
             result = self._engine.protect(
                 pdf=pdf,
@@ -271,11 +280,22 @@ class ProtectTab(ctk.CTkFrame):
         ).start()
 
     def _worker_decrypt(self, pdf, password, output, strip_meta):
+        # Safety: never let the output overwrite the source file.
+        if output.resolve() == pdf.resolve():
+            self.after(0, self._status.err,
+                       "Il file di destinazione coincide con il file di "
+                       "origine: l'operazione è stata annullata per non "
+                       "sovrascrivere il PDF originale.")
+            return
         try:
             result = self._engine.unlock(pdf, password, output,
                                          strip_meta=strip_meta)
             if result.success:
-                self.after(0, self._status.ok, f"Salvato: {output.name}")
+                if result.warning:
+                    self.after(0, self._status.ok,
+                               f"Salvato: {output.name}  —  {result.warning}")
+                else:
+                    self.after(0, self._status.ok, f"Salvato: {output.name}")
                 self.after(0, self._clear_passwords)
             else:
                 self.after(0, self._status.err, result.error)

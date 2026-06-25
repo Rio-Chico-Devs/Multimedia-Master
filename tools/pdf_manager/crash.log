@@ -606,3 +606,209 @@ STARTUP  [2026-06-16 17:24:23]
 ======================================================================
 Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
 CWD: C:\Users\bruno\multimedia-master\tools\pdf_manager
+
+======================================================================
+STARTUP  [2026-06-19 11:57:18]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 14:01:27]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 14:01:34]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 14:01:34]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 14:06:46]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 14:06:49]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 14:28:10]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+UNCAUGHT EXCEPTION (Tk callback)  [2026-06-19 14:30:22]
+======================================================================
+Traceback (most recent call last):
+  File "C:\Users\bruno\AppData\Local\Programs\Python\Python311\Lib\tkinter\__init__.py", line 1967, in __call__
+    return self.func(*args)
+           ^^^^^^^^^^^^^^^^
+  File "C:\Users\bruno\AppData\Local\Programs\Python\Python311\Lib\tkinter\__init__.py", line 861, in callit
+    func(*args)
+  File "C:\Users\bruno\multimedia-master\tools\pdf_manager\ui\translate_tab.py", line 202, in _install_done
+    self._status.ok(f"Installato {src}→{tgt}")
+  File "C:\Users\bruno\multimedia-master\tools\common\ui\widgets.py", line 45, in ok
+    def ok(self,   msg: str) -> None: self.configure(text=f"✓  {msg}", text_color="#4caf50")
+                                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bruno\AppData\Local\Programs\Python\Python311\Lib\site-packages\customtkinter\windows\widgets\ctk_label.py", line 206, in configure
+    self._label.configure(text=self._text)
+  File "C:\Users\bruno\AppData\Local\Programs\Python\Python311\Lib\tkinter\__init__.py", line 1721, in configure
+    return self._configure('configure', cnf, kw)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\bruno\AppData\Local\Programs\Python\Python311\Lib\tkinter\__init__.py", line 1711, in _configure
+    self.tk.call(_flatten((self._w, cmd)) + self._options(cnf))
+_tkinter.TclError: invalid command name ".!ctktabview.!ctkframe3.!translatetab.!_languagepackdialog.!statusbar.!label"
+
+
+======================================================================
+STARTUP  [2026-06-19 14:36:43]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 14:37:12]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 15:40:25]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-19 15:40:38]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STDERR  [2026-06-19 15:41:29]
+======================================================================
+2026-06-19 15:41:29 WARNING: Language en package default expects mwt, which has been added
+
+
+======================================================================
+STARTUP  [2026-06-19 16:12:54]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STDERR  [2026-06-19 16:13:59]
+======================================================================
+2026-06-19 16:13:59 WARNING: Language en package default expects mwt, which has been added
+
+
+======================================================================
+STARTUP  [2026-06-20 14:16:19]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STDERR  [2026-06-20 14:18:07]
+======================================================================
+2026-06-20 14:18:07 WARNING: Language en package default expects mwt, which has been added
+
+
+======================================================================
+STARTUP  [2026-06-22 15:46:06]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STDERR  [2026-06-22 15:47:30]
+======================================================================
+2026-06-22 15:47:30 WARNING: Language en package default expects mwt, which has been added
+
+
+======================================================================
+STARTUP  [2026-06-22 16:20:32]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STDERR  [2026-06-22 16:21:10]
+======================================================================
+2026-06-22 16:21:10 WARNING: Language en package default expects mwt, which has been added
+
+
+======================================================================
+STARTUP  [2026-06-23 13:52:03]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-23 15:32:14]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-24 10:53:52]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STDERR  [2026-06-24 11:10:50]
+======================================================================
+2026-06-24 11:10:50 WARNING: Language en package default expects mwt, which has been added
+
+
+======================================================================
+STARTUP  [2026-06-24 11:49:38]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STDERR  [2026-06-24 12:04:52]
+======================================================================
+2026-06-24 12:04:52 WARNING: Language en package default expects mwt, which has been added
+
+
+======================================================================
+STARTUP  [2026-06-24 14:36:13]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STDERR  [2026-06-24 15:51:46]
+======================================================================
+C:\Users\bruno\multimedia-master\venv\Lib\site-packages\huggingface_hub\file_download.py:143: UserWarning: `huggingface_hub` cache-system uses symlinks by default to efficiently store duplicated files but your machine does not support them in C:\Users\bruno\.cache\huggingface\hub\models--facebook--nllb-200-distilled-600M. Caching files will still work but in a degraded version that might require more space on your disk. This warning can be disabled by setting the `HF_HUB_DISABLE_SYMLINKS_WARNING` environment variable. For more details, see https://huggingface.co/docs/huggingface_hub/how-to-cache#limitations.
+To support symlinks on Windows, you either need to activate Developer Mode or to run Python as an administrator. In order to activate developer mode, see this article: https://docs.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development
+  warnings.warn(message)
+
+
+======================================================================
+STARTUP  [2026-06-25 14:20:44]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master
+
+======================================================================
+STARTUP  [2026-06-25 14:35:12]
+======================================================================
+Python 3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]
+CWD: C:\Users\bruno\multimedia-master

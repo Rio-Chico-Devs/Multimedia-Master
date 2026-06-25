@@ -202,10 +202,18 @@ class PreviewPanel(ctk.CTkFrame):
             # a 20 MP photo needs ~70 MB uncompressed; draft() keeps it ≤ 18 MB.
             # This is a no-op for PNG, WebP, TIFF and other formats.
             pil.draft("RGB", (3840, 2160))
+            # Decode into memory, then return a DETACHED copy so the file
+            # handle can be released without breaking the returned image.
+            # Image.close() destroys the decoded core (sets .im to a
+            # DeferredError) — so the returned image must be an independent
+            # copy(), and closing the original releases the OS file handle
+            # (avoids the Windows source-file lock).
             pil.load()
+            img = pil.copy()
+            pil.close()
             size_b   = path.stat().st_size
             size_str = (f"{size_b / 1024:.0f} KB" if size_b < 1_048_576
                         else f"{size_b / 1_048_576:.2f} MB")
-            return pil, f"{orig_w}×{orig_h} px  ·  {size_str}"
+            return img, f"{orig_w}×{orig_h} px  ·  {size_str}"
         except Exception as exc:
             return None, f"Errore: {exc}"

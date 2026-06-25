@@ -5,23 +5,47 @@
 customtkinter>=5.2.0,<6
 
 # ── Image processing ──────────────────────────────────────────────────────────
-Pillow>=10.0.0,<12
+Pillow>=12.2.0,<13        # >=12.2.0: fixes the image-parser CVEs flagged by
+                          # pip-audit (PYSEC-2026-165, CVE-2026-25990/40192/
+                          # 42309/42310/42311) — these are the "malicious image"
+                          # attack surface, keep this current.
 
 # ── Drag & drop (optional, graceful fallback if not installed) ────────────────
 tkinterdnd2>=0.3.0,<1
 
 # ── PDF operations ────────────────────────────────────────────────────────────
-pypdf>=4.0.0,<6           # merge, split, encrypt, form fields
+pypdf>=6.13.3,<7          # merge, split, encrypt, form fields
+                          # >=6.13.3: clears 30+ pypdf CVEs flagged by pip-audit
+                          # (the "malicious PDF" attack surface). NOTE: this is a
+                          # major bump from the old 5.x pin — re-run the PDF tests
+                          # (merge/split/encrypt/forms) in TESTING.md after upgrading.
 reportlab>=4.0.0,<5       # create PDF from images (no OCR path)
 
 # ── PDF visual editor — render pages as images for the Modifica tab ──────────
-pymupdf>=1.23.0,<2        # pip install pymupdf  (also known as fitz)
+pymupdf>=1.24.13,<2       # pip install pymupdf  (also known as fitz)
+                          # >=1.24.13: 1.24.12 raises AssertionError on import
+                          # under a frozen --windowed build (PyMuPDF #3981)
 
 # ── PDF text extraction (optional, better layout than pypdf) ──────────────────
 pdfplumber>=0.10.0,<1
 
-# ── OCR — searchable PDF (optional, also needs Tesseract binary installed) ────
-# pytesseract>=0.3.10
+# ── OCR — searchable PDF + scanned-page text for Translate tab (optional) ─────
+#    Pure pip, no separate native installer: the base (Chinese+English)
+#    model ships inside the wheel. For accurate Italian/French/German/
+#    Spanish recognition, vendor the "latin" model once at build time
+#    (see vendor/rapidocr/README.md).
+# rapidocr-onnxruntime>=1.3.0,<2
+
+# ── PDF translation — offline neural MT (optional) ────────────────────────────
+# Language packages are downloaded once from the app's "Gestisci lingue"
+# dialog (needs internet that one time); translation itself never goes online.
+# argostranslate>=1.9.0,<2
+#
+# Cleans OCR-glued words ("POWERUNITS" -> "POWER UNITS") before translation so
+# the small MT model isn't fed garbage. MIT-licensed, fully offline (ships its
+# own word list), graceful no-op if absent. Strongly recommended for scanned
+# PDFs.
+# wordninja>=2.0.0,<3
 
 # ── Audio Manager ─────────────────────────────────────────────────────────────
 pydub>=0.25.1,<1           # audio manipulation

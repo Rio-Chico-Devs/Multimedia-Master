@@ -9,6 +9,7 @@ If demucs is not installed, shows clear installation instructions.
 """
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 
@@ -176,28 +177,37 @@ class StemsTab(ctk.CTkFrame):
             text_color="#f44336",
         ).pack()
 
-        ctk.CTkLabel(
-            frame,
-            text="Installa PyTorch poi demucs (circa 2 GB totali):",
-            font=ctk.CTkFont(size=11), text_color="#aaa",
-        ).pack(pady=(12, 4))
-
-        for cmd in (
-            "pip install torch torchaudio --index-url "
-            "https://download.pytorch.org/whl/cpu",
-            "pip install demucs",
-        ):
+        if getattr(sys, "frozen", False):
             ctk.CTkLabel(
-                frame, text=cmd,
-                font=ctk.CTkFont(family="Courier", size=11),
-                fg_color="#1a1a1a", corner_radius=4,
-                text_color="#4fa8e0",
-            ).pack(fill="x", padx=40, pady=3)
+                frame,
+                text="Componente opzionale non incluso in questa build\n"
+                     "(richiede PyTorch + demucs, circa 2 GB).",
+                font=ctk.CTkFont(size=11), text_color="#aaa",
+                justify="center",
+            ).pack(pady=(12, 12))
+        else:
+            ctk.CTkLabel(
+                frame,
+                text="Installa PyTorch poi demucs (circa 2 GB totali):",
+                font=ctk.CTkFont(size=11), text_color="#aaa",
+            ).pack(pady=(12, 4))
 
-        ctk.CTkLabel(
-            frame, text="Poi riavvia Multimedia Master.",
-            font=ctk.CTkFont(size=11), text_color="#aaa",
-        ).pack(pady=12)
+            for cmd in (
+                "pip install torch torchaudio --index-url "
+                "https://download.pytorch.org/whl/cpu",
+                "pip install demucs",
+            ):
+                ctk.CTkLabel(
+                    frame, text=cmd,
+                    font=ctk.CTkFont(family="Courier", size=11),
+                    fg_color="#1a1a1a", corner_radius=4,
+                    text_color="#4fa8e0",
+                ).pack(fill="x", padx=40, pady=3)
+
+            ctk.CTkLabel(
+                frame, text="Poi riavvia Multimedia Master.",
+                font=ctk.CTkFont(size=11), text_color="#aaa",
+            ).pack(pady=12)
 
     # ── Callbacks ──────────────────────────────────────────────────────────
 

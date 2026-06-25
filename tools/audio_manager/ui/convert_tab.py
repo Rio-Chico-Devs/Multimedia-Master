@@ -19,7 +19,7 @@ from common.ui.widgets import (SectionLabel, Separator, StatusBar,
                                adaptive_wraplength)
 from common.notify import notify
 from common.settings import Settings
-from core.audio_engine import AudioEngine
+from core.audio_engine import AudioEngine, AudioResult
 from core.formats import AUDIO_FORMATS, PRESETS, AUDIO_EXTS
 
 
@@ -328,8 +328,22 @@ class ConvertTab(ctk.CTkFrame):
             out_dir = self._out_dir or path.parent
             output  = out_dir / (path.stem + ext)
             self.after(0, lambda l=lbl: l.configure(text="⏳", text_color="#aaa"))
-            result = self._engine.convert(path, output, fmt, bitrate, sr, ch,
-                                          cancel_event=self._cancel_event)
+            # Safety: never let ffmpeg read and write the same file —
+            # it truncates the source while still decoding it.
+            if output.resolve() == path.resolve():
+                err_msg = "Output identico al sorgente (stesso nome/formato)."
+                errors.append(f"{path.name}: {err_msg}")
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✗", text_color="#f44336"))
+                self.after(0, self._progress.set, (i + 1) / total)
+                self.after(0, self._status.busy,
+                           f"In corso ({i+1}/{total})…")
+                continue
+            try:
+                result = self._engine.convert(path, output, fmt, bitrate, sr, ch,
+                                              cancel_event=self._cancel_event)
+            except Exception as exc:
+                result = AudioResult(output=None, success=False, error=str(exc))
             if result.success:
                 ok += 1
                 self.after(0, lambda l=lbl: l.configure(

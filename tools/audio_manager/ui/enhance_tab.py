@@ -17,7 +17,8 @@ from pathlib import Path
 import customtkinter as ctk
 
 from common.ui.widgets import SectionLabel, Separator, StatusBar
-from core.audio_engine import AudioEngine
+from common.depmsg import pip_hint
+from core.audio_engine import AudioEngine, AudioResult
 from core.dependencies import DepStatus
 from core.formats import AUDIO_EXTS
 
@@ -91,7 +92,7 @@ class EnhanceTab(ctk.CTkFrame):
         if not nr_ok:
             ctk.CTkLabel(
                 right,
-                text="⚠  pip install noisereduce soundfile numpy",
+                text=f"⚠  {pip_hint('noisereduce soundfile numpy')}",
                 text_color="#f44336", font=ctk.CTkFont(size=10),
                 anchor="w",
             ).pack(fill="x", padx=16, pady=(0, 6))
@@ -354,19 +355,34 @@ class EnhanceTab(ctk.CTkFrame):
             out_dir = self._out_dir or path.parent
             output  = out_dir / (path.stem + ext)
 
+            # Safety: enhance ends in an ffmpeg "-y" write; if output resolves
+            # to the source (default format "Stesso del file" + default folder)
+            # ffmpeg would truncate the file while still decoding it. Refuse
+            # the in-place write, exactly like the Convert tab.
+            if output.resolve() == path.resolve():
+                err = "Output identico al sorgente (stesso nome/formato)."
+                errors.append(f"{path.name}: {err}")
+                self.after(0, lambda l=lbl: l.configure(
+                    text="✗", text_color="#f44336"))
+                self.after(0, self._status.busy, f"In corso ({i+1}/{total})…")
+                continue
+
             self.after(0, lambda l=lbl: l.configure(
                 text="⏳", text_color="#aaa"))
-            result = self._engine.enhance(
-                src=path,
-                output=output,
-                denoise=params["denoise"],
-                normalize=params["normalize"],
-                highpass=params["highpass"],
-                eq_presence=params["eq_presence"],
-                compress=params["compress"],
-                prop_decrease=params["prop_decrease"],
-                progress_cb=lambda p, _i=i: _prog(p, _i),
-            )
+            try:
+                result = self._engine.enhance(
+                    src=path,
+                    output=output,
+                    denoise=params["denoise"],
+                    normalize=params["normalize"],
+                    highpass=params["highpass"],
+                    eq_presence=params["eq_presence"],
+                    compress=params["compress"],
+                    prop_decrease=params["prop_decrease"],
+                    progress_cb=lambda p, _i=i: _prog(p, _i),
+                )
+            except Exception as exc:
+                result = AudioResult(output=None, success=False, error=str(exc))
             if result.success:
                 ok += 1
                 self.after(0, lambda l=lbl: l.configure(

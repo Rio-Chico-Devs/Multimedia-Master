@@ -149,11 +149,16 @@ class FileRow(ctk.CTkFrame):
     def _load_thumb(self) -> None:
         s = self.THUMB_SIZE
         try:
-            pil = Image.open(self.file_path)
-            w, h = pil.width, pil.height
-            pil.draft("RGB", (s * 2, s * 2))
-            pil.thumbnail((s, s), Image.LANCZOS)
-            self.after(0, self._update_thumb, pil, f"{w}×{h} px")
+            with Image.open(self.file_path) as pil:
+                w, h = pil.width, pil.height
+                pil.draft("RGB", (s * 2, s * 2))
+                pil.thumbnail((s, s), Image.LANCZOS)
+                # Hand _update_thumb a DETACHED copy: leaving the `with` closes
+                # the underlying file, and on exit Pillow may destroy the
+                # decoded core of `pil` itself — copy() is an independent
+                # in-memory image that stays usable after the file is closed.
+                thumb = pil.copy()
+            self.after(0, self._update_thumb, thumb, f"{w}×{h} px")
         except Exception:
             pass
 

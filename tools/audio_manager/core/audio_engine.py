@@ -38,6 +38,12 @@ def safe_tempfile(suffix: str = "") -> Path:
     os.close(fd)
     return Path(name)
 
+# ── No-console-flash subprocess kwargs (Windows only) ────────────────────────
+# ffmpeg.exe is a console app: even with the parent GUI built --windowed, it
+# pops its own console window for every call unless explicitly suppressed.
+from common.proc import NO_WINDOW as _NO_WINDOW_KW
+from common.depmsg import pip_hint
+
 # ── Creative voice-effect filter chains (all via ffmpeg) ─────────────────────
 # Each entry: key → (human description, ffmpeg -af filter chain)
 # Pitch shifts use asetrate+aresample+atempo so duration is preserved.
@@ -310,12 +316,26 @@ class AudioEngine:
         merge_stderr: bool = False,
     ) -> tuple[int | None, str, bool]:
         pipe = subprocess.STDOUT if merge_stderr else subprocess.PIPE
+        # New process group/session so cancel can kill the whole tree, not
+        # just the direct child — demucs spawns worker subprocesses that
+        # terminate()/kill() on the parent alone would otherwise orphan,
+        # leaving them pinning the CPU after "Annulla". On Windows this
+        # shares the same "creationflags" kwarg as NO_WINDOW, so OR the
+        # flags together instead of splatting two dicts with the same key.
+        if sys.platform == "win32":
+            _group_kw = {
+                "creationflags": _NO_WINDOW_KW.get("creationflags", 0)
+                                 | subprocess.CREATE_NEW_PROCESS_GROUP
+            }
+        else:
+            _group_kw = {**_NO_WINDOW_KW, "start_new_session": True}
         proc = subprocess.Popen(
             cmd,
             stdout=(subprocess.PIPE if merge_stderr else subprocess.DEVNULL),
             stderr=pipe,
             encoding="utf-8",
             errors="replace",
+            **_group_kw,
         )
         stream = proc.stdout if merge_stderr else proc.stderr
         buf: list[str] = []
@@ -336,19 +356,42 @@ class AudioEngine:
         while proc.poll() is None:
             if cancel_event is not None and cancel_event.is_set():
                 cancelled = True
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except Exception:
-                    try:
-                        proc.kill()
-                    except Exception:
-                        pass
+                AudioEngine._kill_tree(proc)
                 break
             time.sleep(0.1)
 
         drainer.join(timeout=1)
         return proc.returncode, "".join(buf), cancelled
+
+    @staticmethod
+    def _kill_tree(proc: "subprocess.Popen") -> None:
+        """Kill proc and every descendant it spawned (see _group_kw above)."""
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    timeout=5, **_NO_WINDOW_KW,
+                )
+            except Exception:
+                pass
+            try:
+                proc.wait(timeout=3)
+            except Exception:
+                try: proc.kill()
+                except Exception: pass
+        else:
+            import signal
+            try:
+                os.killpg(proc.pid, signal.SIGTERM)
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except Exception:
+                    pass
+                try: proc.wait(timeout=2)
+                except Exception: pass
 
     # ── Probe ─────────────────────────────────────────────────────────────
 
@@ -377,6 +420,7 @@ class AudioEngine:
                     stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
                     encoding="utf-8", errors="replace",
                     timeout=15,
+                    **_NO_WINDOW_KW,
                 )
                 for line in result.stderr.splitlines():
                     if "Duration:" in line and duration_s == 0.0:
@@ -448,7 +492,7 @@ class AudioEngine:
         """Convert/compress audio to the target format using ffmpeg directly."""
         if not self._ffmpeg:
             return AudioResult(output=output, success=False,
-                               error="ffmpeg non trovato. Esegui: pip install imageio-ffmpeg")
+                               error=f"ffmpeg non trovato — {pip_hint('imageio-ffmpeg')}")
         try:
             cmd = [self._ffmpeg, "-y", "-i", str(src)]
             if sample_rate:
@@ -660,7 +704,7 @@ class AudioEngine:
         """
         if not self._ffmpeg:
             return AudioResult(output=output, success=False,
-                               error="ffmpeg non trovato. pip install imageio-ffmpeg")
+                               error=f"ffmpeg non trovato — {pip_hint('imageio-ffmpeg')}")
 
         # Filter chain per preset
         if preset == "leggero":
@@ -702,6 +746,7 @@ class AudioEngine:
                 stderr=subprocess.PIPE,
                 encoding="utf-8",
                 errors="replace",
+                **_NO_WINDOW_KW,
             )
             if proc.returncode != 0:
                 err = proc.stderr.strip()[-400:] if proc.stderr else "Errore sconosciuto"
@@ -991,6 +1036,7 @@ class AudioEngine:
                     [self._ffmpeg, "-y", "-i", str(path), str(tmp)],
                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                     encoding="utf-8", errors="replace",
+                    **_NO_WINDOW_KW,
                 )
                 if proc.returncode != 0 or tmp.stat().st_size == 0:
                     return [0.0] * num_samples, [0.0] * num_samples
@@ -1888,6 +1934,7 @@ class AudioEngine:
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.PIPE,
                     encoding="utf-8", errors="replace",
+                    **_NO_WINDOW_KW,
                 )
                 if res.returncode != 0:
                     return AudioResult(
@@ -1986,6 +2033,7 @@ class AudioEngine:
                     stdout=subprocess.DEVNULL,
                     encoding="utf-8", errors="replace",
                     timeout=60,
+                    **_NO_WINDOW_KW,
                 )
                 if res.returncode == 0:
                     details.append("Decodifica ffmpeg: nessun errore")
