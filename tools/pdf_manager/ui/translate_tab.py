@@ -332,18 +332,6 @@ class TranslateTab(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        try:
-            import argostranslate  # noqa: F401
-        except ImportError:
-            from common.depmsg import pip_hint
-            ctk.CTkLabel(
-                self,
-                text="🌐  Traduttore PDF\n\n"
-                     f"Componente non disponibile — {pip_hint('argostranslate')}",
-                font=ctk.CTkFont(size=13), text_color="#f44336", justify="center",
-            ).grid(row=0, column=0, padx=40, pady=60, sticky="n")
-            return
-
         self._picker = SingleFilePicker(self, label="PDF da tradurre",
                                         on_change=self._on_file_change)
         self._picker.grid(row=0, column=0, sticky="ew", pady=(0, 8))
@@ -451,7 +439,43 @@ class TranslateTab(ctk.CTkFrame):
     # ── Language list ─────────────────────────────────────────────────────
 
     def _refresh_languages(self) -> None:
-        pairs = te.installed_pairs()
+        # installed_pairs() imports argostranslate.translate, which transitively
+        # pulls in stanza + ctranslate2 — a few seconds the first time. The PDF
+        # window builds this tab eagerly at startup, so doing that on the UI
+        # thread is exactly why "opening the PDF section" felt slow. Load it on
+        # a worker thread instead; the pickers fill in a moment later.
+        self._no_lang_lbl.configure(text="")
+        self._src_menu.configure(values=["—"])
+        self._tgt_menu.configure(values=["—"])
+        self._src_var.set("—")
+        self._tgt_var.set("—")
+        self._status.busy("Carico le lingue installate…")
+        threading.Thread(target=self._worker_load_argos_langs, daemon=True).start()
+
+    def _worker_load_argos_langs(self) -> None:
+        try:
+            pairs = te.installed_pairs()
+            error = None
+        except Exception as exc:
+            pairs, error = [], str(exc)
+        self.after(0, self._argos_langs_loaded, pairs, error)
+
+    def _argos_langs_loaded(self, pairs: list, error: str | None) -> None:
+        # The user may have switched to a big-model engine while we were
+        # loading — don't let argos's late result clobber its language list.
+        if self._mt_engine != "argos":
+            return
+        self._status.clear()
+        if error is not None:
+            from common.depmsg import pip_hint
+            self._no_lang_lbl.configure(
+                text=f"Argos Translate non disponibile — {pip_hint('argostranslate')}. "
+                     "Puoi comunque usare NLLB-200 o mBART-50 dal menu Motore.")
+            self._src_menu.configure(values=["—"])
+            self._tgt_menu.configure(values=["—"])
+            self._src_var.set("—")
+            self._tgt_var.set("—")
+            return
         self._pairs = pairs
         sources = sorted({(f, fn) for f, fn, _, _ in pairs}, key=lambda x: x[1])
         if not sources:
