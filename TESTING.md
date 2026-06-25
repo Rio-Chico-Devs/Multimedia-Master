@@ -65,6 +65,10 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 
 ## 3. Gestione PDF
 
+| ID | Test | Passi | Risultato atteso | Esito |
+|----|------|-------|------------------|:----:|
+| P0 | Avvio rapido | Apri la finestra "Gestione PDF" | Si apre rapidamente: solo la scheda "Modifica" viene costruita subito, le altre 6 vengono costruite al primo click (nessun ritardo percepibile nel cambio scheda) | ☐ |
+
 ### 3a. Modifica (editor visuale — richiede pymupdf)
 
 | ID | Test | Passi | Risultato atteso | Esito |

@@ -107,32 +107,53 @@ class PdfWindow(ctk.CTk):
                      anchor="e").pack(side="right")
 
         # Tab view
-        tabs = ctk.CTkTabview(self, corner_radius=10)
+        tabs = ctk.CTkTabview(self, corner_radius=10, command=self._on_tab_change)
         tabs.pack(fill="both", expand=True, padx=16, pady=(10, 16))
+        self._tabs = tabs
+        self._built_tabs: set[str] = set()
 
         for name in ("Modifica", "Converti", "Traduci", "Unisci",
                      "Dividi", "Proteggi", "Analizza"):
             tabs.add(name)
 
-        # Modifica tab (visual editor) — first so it's prominent
-        edit_tab = EditTab(tabs.tab("Modifica"))
-        edit_tab.pack(fill="both", expand=True)
-        self._edit_tab = edit_tab
+        # Modifica is the tab shown on startup, so build it eagerly; the
+        # other six are built lazily on first selection (see _on_tab_change)
+        # — constructing all seven CTk widget trees upfront is the main
+        # remaining cost of opening this window.
+        self._build_tab("Modifica")
 
-        # Instantiate each tab and keep references to their file lists
-        convert = ConvertTab(tabs.tab("Converti"))
-        convert.pack(fill="both", expand=True)
-        self._img_list = convert._file_list          # ImageFileList
+    def _on_tab_change(self) -> None:
+        try:
+            name = self._tabs.get()
+        except Exception:
+            return
+        self._build_tab(name)
 
-        translate = TranslateTab(tabs.tab("Traduci"))
-        translate.pack(fill="both", expand=True)
-        self._translate_tab = translate
-        self._tabs = tabs
+    def _build_tab(self, name: str) -> None:
+        if name in self._built_tabs:
+            return
+        self._built_tabs.add(name)
+        container = self._tabs.tab(name)
 
-        merge = MergeTab(tabs.tab("Unisci"))
-        merge.pack(fill="both", expand=True)
-        self._merge_list = merge._pdf_list           # PdfMergeList
-
-        SplitTab  (tabs.tab("Dividi"))  .pack(fill="both", expand=True)
-        ProtectTab(tabs.tab("Proteggi")).pack(fill="both", expand=True)
-        AnalyzeTab(tabs.tab("Analizza")).pack(fill="both", expand=True)
+        if name == "Modifica":
+            edit_tab = EditTab(container)
+            edit_tab.pack(fill="both", expand=True)
+            self._edit_tab = edit_tab
+        elif name == "Converti":
+            convert = ConvertTab(container)
+            convert.pack(fill="both", expand=True)
+            self._img_list = convert._file_list       # ImageFileList
+        elif name == "Traduci":
+            translate = TranslateTab(container)
+            translate.pack(fill="both", expand=True)
+            self._translate_tab = translate
+        elif name == "Unisci":
+            merge = MergeTab(container)
+            merge.pack(fill="both", expand=True)
+            self._merge_list = merge._pdf_list         # PdfMergeList
+        elif name == "Dividi":
+            SplitTab(container).pack(fill="both", expand=True)
+        elif name == "Proteggi":
+            ProtectTab(container).pack(fill="both", expand=True)
+        elif name == "Analizza":
+            AnalyzeTab(container).pack(fill="both", expand=True)
