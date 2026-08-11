@@ -200,6 +200,11 @@ class ConvertTab(ctk.CTkFrame):
         self._add_paths([Path(p) for p in paths])
 
     def _add_paths(self, paths: list[Path]) -> None:
+        # Mutating the list mid-batch would desync the worker's progress
+        # counters and, for removals, destroy row widgets it still writes to.
+        if self._busy:
+            self._status.info("Conversione in corso — attendi la fine.")
+            return
         existing = {r[0] for r in self._file_rows}
         for p in paths:
             if p not in existing:
@@ -220,12 +225,18 @@ class ConvertTab(ctk.CTkFrame):
         self._file_rows.append((path, row, status))
 
     def _remove_last(self) -> None:
+        if self._busy:
+            self._status.info("Conversione in corso — attendi la fine.")
+            return
         if self._file_rows:
             _, row, _ = self._file_rows.pop()
             row.destroy()
             self._refresh_empty()
 
     def _clear(self) -> None:
+        if self._busy:
+            self._status.info("Conversione in corso — attendi la fine.")
+            return
         for _, row, _ in self._file_rows:
             row.destroy()
         self._file_rows.clear()
@@ -299,29 +310,35 @@ class ConvertTab(ctk.CTkFrame):
             sr      = preset.sample_rate
             ch      = preset.channels
 
+        # Work off a snapshot (same as clean_tab/enhance_tab) so the batch is
+        # not affected by list mutations, and so `total` stays consistent with
+        # what is actually iterated.
+        rows_snapshot = list(self._file_rows)
+
         self._busy = True
         self._cancel_event.clear()
         self._btn_run.configure(state="disabled")
         self._btn_cancel.configure(state="normal")
         self._progress.set(0)
-        self._status.busy(f"Avvio conversione (0/{len(self._file_rows)})…")
+        self._status.busy(f"Avvio conversione (0/{len(rows_snapshot)})…")
         threading.Thread(
-            target=self._worker, args=(fmt, bitrate, sr, ch), daemon=True
+            target=self._worker, args=(fmt, bitrate, sr, ch, rows_snapshot),
+            daemon=True
         ).start()
 
     def _cancel(self) -> None:
         self._cancel_event.set()
         self._status.busy("Annullamento…")
 
-    def _worker(self, fmt: str, bitrate, sr, ch) -> None:
+    def _worker(self, fmt: str, bitrate, sr, ch, rows: list) -> None:
         import sys
         ext       = AUDIO_FORMATS[fmt].ext
-        total     = len(self._file_rows)
+        total     = len(rows)
         ok        = 0
         cancelled = False
         errors: list[str] = []
 
-        for i, (path, _, lbl) in enumerate(self._file_rows):
+        for i, (path, _, lbl) in enumerate(rows):
             if self._cancel_event.is_set():
                 cancelled = True
                 break

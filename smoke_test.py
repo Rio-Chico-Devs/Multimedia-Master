@@ -234,6 +234,59 @@ def check_translation_cleanup() -> None:
         _record("FAIL", "NLLB language table", str(exc))
 
 
+def check_audio_engine() -> None:
+    print("\n[6] Audio engine (format mapping / ID3v1 / voice effects)")
+    # Each tool owns a top-level package literally named `core`, and the PDF
+    # one is already bound in sys.modules from section [5]. Drop it and put
+    # audio_manager first so `core.audio_engine` resolves to the audio tool.
+    # (Run last: this repoints `core` for the rest of the process.)
+    for mod in [m for m in sys.modules if m == "core" or m.startswith("core.")]:
+        del sys.modules[mod]
+    sys.path.insert(0, str(ROOT / "tools" / "audio_manager"))
+
+    # pydub's export(format=) is an ffmpeg MUXER name, not a file extension.
+    try:
+        from core.audio_engine import _pydub_format
+        from core.formats import AUDIO_EXTS
+        bad = [e for e in ("m4a", "aac", "aif", "wma", "mka")
+               if _pydub_format("." + e) == e]
+        empty = [e for e in AUDIO_EXTS if not _pydub_format(e)]
+        ok = not bad and not empty and _pydub_format(".mp3") == "mp3"
+        _record("PASS" if ok else "FAIL", "pydub muxer mapping",
+                f".m4a -> {_pydub_format('.m4a')}"
+                + (f", unmapped: {bad}" if bad else ""))
+    except Exception as exc:
+        _record("FAIL", "pydub muxer mapping", str(exc))
+
+    # ID3v1.1: byte 125 is the zero marker, 126 the track, 127 ALWAYS the genre.
+    try:
+        from core.audio_engine import AudioEngine
+        tag = (b"TAG" + b"T".ljust(30, b"\x00") + b"A".ljust(30, b"\x00")
+               + b"B".ljust(30, b"\x00") + b"2024"
+               + b"c".ljust(28, b"\x00") + bytes([0, 7]) + bytes([17]))
+        got = {f["raw_key"]: f["value"] for f in AudioEngine()._read_id3v1(tag)}
+        ok = (got.get("_id3v1_track") == "7"
+              and got.get("_id3v1_genre") == "Rock")
+        _record("PASS" if ok else "FAIL", "ID3v1.1 offsets",
+                f"track={got.get('_id3v1_track')}, "
+                f"genre={got.get('_id3v1_genre')}")
+    except Exception as exc:
+        _record("FAIL", "ID3v1.1 offsets", str(exc))
+
+    # asetrate constants are relative to 44100, so the chain must resample first.
+    try:
+        from core.audio_engine import VOICE_EFFECTS
+        pitch = {k: c for k, (_, c) in VOICE_EFFECTS.items()
+                 if "asetrate=" in c}
+        bad = [k for k, c in pitch.items()
+               if "aresample=44100" not in ("aresample=44100," + c).split(
+                   "asetrate=")[0]]
+        _record("PASS" if not bad else "FAIL", "voice-effect rate normalisation",
+                f"{len(pitch)} pitch effects" + (f", bad: {bad}" if bad else ""))
+    except Exception as exc:
+        _record("FAIL", "voice-effect rate normalisation", str(exc))
+
+
 def main() -> int:
     print("Multimedia Master — smoke test")
     check_versions()
@@ -241,6 +294,7 @@ def main() -> int:
     check_pypdf()
     check_pillow()
     check_translation_cleanup()
+    check_audio_engine()
 
     n_fail = sum(1 for s, _, _ in _results if s == "FAIL")
     n_skip = sum(1 for s, _, _ in _results if s == "SKIP")

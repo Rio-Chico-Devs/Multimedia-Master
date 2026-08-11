@@ -113,6 +113,26 @@ VOICE_EFFECTS: dict[str, tuple[str, str]] = {
     ),
 }
 
+# pydub's export(format=...) is handed to ffmpeg as `-f <name>`, which is a
+# MUXER name, not a file extension. For most formats the two coincide
+# (mp3, wav, flac, ogg, opus) but for several they do not, and ffmpeg then
+# fails outright with "Requested output format 'x' is not a suitable output
+# format" — which broke Taglia/Dividi/Muta/volume-fade on .m4a and friends.
+_PYDUB_MUXER: dict[str, str] = {
+    "m4a":  "ipod",
+    "aac":  "adts",
+    "aif":  "aiff",
+    "aifc": "aiff",
+    "wma":  "asf",
+    "mka":  "matroska",
+}
+
+
+def _pydub_format(suffix: str) -> str:
+    """Map a filename extension to the ffmpeg muxer name pydub needs."""
+    ext = suffix.lstrip(".").lower()
+    return _PYDUB_MUXER.get(ext, ext)
+
 # ── ID3 frame → (display_name, category) ─────────────────────────────────────
 # category: standard | technical | history | hidden | custom | art | info
 _ID3_INFO: dict[str, tuple[str, str]] = {
@@ -666,7 +686,8 @@ class AudioEngine:
                 cmd += ["-af", ",".join(filters)]
             cmd.append(str(output))
             proc = sp.run(cmd, stdout=sp.DEVNULL, stderr=sp.PIPE,
-                          encoding="utf-8", errors="replace")
+                          encoding="utf-8", errors="replace",
+                          **_NO_WINDOW_KW)
             if proc.returncode != 0 or not output.exists() or output.stat().st_size == 0:
                 lines = (proc.stderr or "").strip().splitlines()
                 return AudioResult(output=output, success=False,
@@ -770,7 +791,7 @@ class AudioEngine:
             audio  = AudioSegment.from_file(str(src))
             end_ms = min(end_ms, len(audio))
             clip   = audio[start_ms:end_ms]
-            fmt    = output.suffix.lstrip(".")
+            fmt    = _pydub_format(output.suffix)
             clip.export(str(output), format=fmt)
             return self._ok(output, len(clip) / 1000.0)
         except Exception as exc:
@@ -796,7 +817,7 @@ class AudioEngine:
                 audio = audio.fade_in(fade_in_ms)
             if fade_out_ms > 0:
                 audio = audio.fade_out(fade_out_ms)
-            fmt = output.suffix.lstrip(".")
+            fmt = _pydub_format(output.suffix)
             audio.export(str(output), format=fmt)
             return self._ok(output, len(audio) / 1000.0)
         except Exception as exc:
@@ -900,7 +921,7 @@ class AudioEngine:
             from pydub import AudioSegment
             audio    = AudioSegment.from_file(str(src))
             total_ms = len(audio)
-            fmt      = src.suffix.lstrip(".")
+            fmt      = _pydub_format(src.suffix)
 
             points = [0] + sorted(int(p) for p in split_points_ms) + [total_ms]
             results: list[AudioResult] = []
@@ -935,7 +956,7 @@ class AudioEngine:
                 frame_rate=audio.frame_rate,
             ).set_channels(audio.channels).set_sample_width(audio.sample_width)
             muted = audio[:start_ms] + silence + audio[end_ms:]
-            fmt   = output.suffix.lstrip(".")
+            fmt   = _pydub_format(output.suffix)
             muted.export(str(output), format=fmt)
             return self._ok(output, len(muted) / 1000.0)
         except Exception as exc:
@@ -971,6 +992,7 @@ class AudioEngine:
                  str(output)],
                 stdout=sp.DEVNULL, stderr=sp.PIPE,
                 encoding="utf-8", errors="replace",
+                **_NO_WINDOW_KW,
             )
             if proc.returncode != 0 or not output.exists() or output.stat().st_size == 0:
                 lines = (proc.stderr or "").strip().splitlines()
@@ -991,6 +1013,14 @@ class AudioEngine:
             return AudioResult(output=output, success=False,
                                error=f"Effetto sconosciuto: {effect}")
         _, filter_chain = VOICE_EFFECTS[effect]
+        # The asetrate constants are computed against 44100 Hz (see the table
+        # above), but `asetrate=N` reinterprets the stream relative to its OWN
+        # sample rate — so on a 48 kHz source (any Opus file, most audio pulled
+        # from video) the pitch shift and the atempo duration compensation are
+        # both wrong. Normalise to 44100 first so the constants mean what the
+        # table says they mean.
+        if "asetrate=" in filter_chain:
+            filter_chain = "aresample=44100," + filter_chain
         try:
             import subprocess as sp
             proc = sp.run(
@@ -999,6 +1029,7 @@ class AudioEngine:
                  str(output)],
                 stdout=sp.DEVNULL, stderr=sp.PIPE,
                 encoding="utf-8", errors="replace",
+                **_NO_WINDOW_KW,
             )
             if proc.returncode != 0 or not output.exists() or output.stat().st_size == 0:
                 lines = (proc.stderr or "").strip().splitlines()
@@ -1332,18 +1363,31 @@ class AudioEngine:
                                               editable=edit, deletable=dele,
                                               warning=warn))
 
-            # ID3v1 + LAME header (binary analysis)
+            # ID3v1 + LAME header (binary analysis). Read only the head and the
+            # tail: the Xing/LAME tag sits within the first ~64 KB after the
+            # ID3v2 block and ID3v1 is the last 128 bytes. Slurping the whole
+            # file pulled an album-length WAV entirely into memory.
             try:
-                raw_data = path.read_bytes()
-                # ID3v2 size for LAME parser
-                id3v2_size = 0
-                if raw_data[:3] == b"ID3":
-                    id3v2_size = (10 + ((raw_data[6] & 0x7f) << 21
-                                        | (raw_data[7] & 0x7f) << 14
-                                        | (raw_data[8] & 0x7f) << 7
-                                        | (raw_data[9] & 0x7f)))
-                fields.extend(self._read_id3v1(raw_data))
-                fields.extend(self._parse_lame_header(raw_data, id3v2_size))
+                size = path.stat().st_size
+                with path.open("rb") as fh:
+                    id3v2_size = 0
+                    probe = fh.read(10)
+                    if len(probe) >= 10 and probe[:3] == b"ID3":
+                        id3v2_size = (10 + ((probe[6] & 0x7f) << 21
+                                            | (probe[7] & 0x7f) << 14
+                                            | (probe[8] & 0x7f) << 7
+                                            | (probe[9] & 0x7f)))
+                    # sync search is bounded to id3v2_size + 64 KB, and the
+                    # Xing/LAME fields sit within ~600 bytes of the sync word
+                    fh.seek(0)
+                    head = fh.read(id3v2_size + 65536 + 4096)
+                    if size > 128:
+                        fh.seek(size - 128)
+                        tail = fh.read(128)
+                    else:
+                        tail = head[-128:]
+                fields.extend(self._read_id3v1(tail))
+                fields.extend(self._parse_lame_header(head, id3v2_size))
             except Exception:
                 pass
         except Exception:
@@ -1450,9 +1494,13 @@ class AudioEngine:
         artist  = _s(data[-95:-65])
         album   = _s(data[-65:-35])
         year    = _s(data[-35:-31])
-        comment = _s(data[-31:-3]) if data[-2] != 0 else _s(data[-31:-3])
-        track   = str(data[-1]) if data[-2] == 0 and data[-1] != 0 else ""
-        genre_i = data[-1] if data[-2] != 0 else 0
+        # ID3v1.1 shortens the 30-byte comment to 28 and uses the last two
+        # bytes as (zero marker, track number). The marker is byte 125 of the
+        # tag == data[-3]; byte 127 == data[-1] is ALWAYS the genre.
+        is_v11  = data[-3] == 0 and data[-2] != 0
+        comment = _s(data[-31:-3]) if is_v11 else _s(data[-31:-1])
+        track   = str(data[-2]) if is_v11 else ""
+        genre_i = data[-1]
         genre   = (_ID3V1_GENRES[genre_i]
                    if genre_i < len(_ID3V1_GENRES) else str(genre_i))
 
@@ -2008,7 +2056,8 @@ class AudioEngine:
             ".aac":  [(0, b"\xff\xf1"), (0, b"\xff\xf9")],
         }
         try:
-            header = path.read_bytes()[:12]
+            with path.open("rb") as fh:      # 12 bytes, not the whole file
+                header = fh.read(12)
             ext    = path.suffix.lower()
             checks = _MAGIC.get(ext, [])
             if checks:

@@ -59,6 +59,12 @@ class MetadataTab(ctk.CTkFrame):
         self._files:    list[Path] = []
         self._sel_idx:  int | None = None
         self._rows:     list[ctk.CTkFrame] = []
+        # Bumped on every selection change / list mutation. A background load
+        # whose generation no longer matches is stale and must not be rendered:
+        # without this the fields of a slow-loading file could land in the panel
+        # after the user picked another one, and Salva would then write those
+        # values onto the newly selected file.
+        self._load_gen: int = 0
         self._field_entries:  dict[str, ctk.CTkEntry] = {}
         self._pending_delete: set[str] = set()
         self._field_rows:     dict[str, ctk.CTkFrame] = {}
@@ -178,15 +184,24 @@ class MetadataTab(ctk.CTkFrame):
         self._refresh_empty()
 
     def _add_list_row(self, path: Path) -> None:
-        idx = len(self._rows)
         row = ctk.CTkFrame(self._list_sf, fg_color="#222", corner_radius=6)
         row.pack(fill="x", pady=2)
         lbl = ctk.CTkLabel(row, text=path.name, anchor="w",
                            font=ctk.CTkFont(size=11))
         lbl.pack(side="left", padx=8, pady=6, fill="x", expand=True)
+        # Bind by widget identity, not by position: _remove_sel() shifts every
+        # later entry of _rows/_files down by one, so an index captured here
+        # would address the wrong file from then on.
         for w in (row, lbl):
-            w.bind("<Button-1>", lambda _, i=idx: self._select(i))
+            w.bind("<Button-1>", lambda _, r=row: self._select_row(r))
         self._rows.append(row)
+
+    def _select_row(self, row: ctk.CTkFrame) -> None:
+        try:
+            idx = self._rows.index(row)
+        except ValueError:      # row already removed from the list
+            return
+        self._select(idx)
 
     def _select(self, idx: int) -> None:
         if idx >= len(self._files):
@@ -196,18 +211,25 @@ class MetadataTab(ctk.CTkFrame):
         self._sel_idx = idx
         self._rows[idx].configure(fg_color="#1a3a5c")
         self._status.busy(f"Caricamento: {self._files[idx].name}…")
+        self._load_gen += 1
         threading.Thread(target=self._load_thread,
-                         args=(self._files[idx],), daemon=True).start()
+                         args=(self._files[idx], self._load_gen),
+                         daemon=True).start()
 
-    def _load_thread(self, path: Path) -> None:
+    def _load_thread(self, path: Path, gen: int) -> None:
         try:
             fields     = self._engine.deep_read_tags(path)
             provenance = self._engine.compute_provenance(path, fields)
             art_bytes  = self._engine.get_album_art(path)
         except Exception as exc:
-            self.after(0, self._status.err, str(exc))
+            self.after(0, self._load_failed, gen, str(exc))
             return
-        self.after(0, self._render, fields, provenance, art_bytes, path)
+        self.after(0, self._render, fields, provenance, art_bytes, path, gen)
+
+    def _load_failed(self, gen: int, msg: str) -> None:
+        if gen != self._load_gen:
+            return
+        self._status.err(msg)
 
     def _remove_sel(self) -> None:
         if self._sel_idx is None:
@@ -216,6 +238,7 @@ class MetadataTab(ctk.CTkFrame):
         self._rows.pop(self._sel_idx)
         self._files.pop(self._sel_idx)
         self._sel_idx = None
+        self._load_gen += 1          # invalidate any load still in flight
         self._set_buttons(False)
         self._clear_panel()
         self._refresh_empty()
@@ -225,6 +248,7 @@ class MetadataTab(ctk.CTkFrame):
             r.destroy()
         self._rows.clear(); self._files.clear()
         self._sel_idx = None
+        self._load_gen += 1          # invalidate any load still in flight
         self._set_buttons(False)
         self._clear_panel()
         self._refresh_empty()
@@ -261,7 +285,12 @@ class MetadataTab(ctk.CTkFrame):
         self._placeholder.grid(row=0, column=0, columnspan=4, padx=20, pady=40)
 
     def _render(self, fields: list[dict], provenance: dict,
-                art_bytes: bytes | None, path: Path) -> None:
+                art_bytes: bytes | None, path: Path, gen: int) -> None:
+        # Drop results of a load the user has already moved on from, otherwise
+        # the panel would show this file's fields while _sel_idx points at
+        # another one — and Salva writes the two together.
+        if gen != self._load_gen:
+            return
         for w in self._meta_sf.winfo_children():
             w.destroy()
         self._field_entries.clear()
@@ -520,11 +549,20 @@ class MetadataTab(ctk.CTkFrame):
             self.after(0, self._status.err, msg + f" — {errors[0]}")
         else:
             self.after(0, self._status.ok, msg)
-        # Reload selected file view
-        if self._sel_idx is not None:
-            self.after(100, lambda: self._select(self._sel_idx))
+        # Reload selected file view. Capture the index now instead of reading
+        # it inside the callback, where it may already be None (list cleared
+        # while the wipe ran) and would blow up in _select's comparison.
+        sel = self._sel_idx
+        if sel is not None:
+            self.after(100, self._reselect, sel)
         else:
             self.after(0, self._set_buttons, True)
+
+    def _reselect(self, idx: int) -> None:
+        if idx < len(self._files):
+            self._select(idx)
+        else:
+            self._set_buttons(True)
 
     def _copy_tags(self) -> None:
         """Copy editable fields from selected file → all others in list."""

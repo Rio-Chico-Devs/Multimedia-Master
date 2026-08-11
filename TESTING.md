@@ -136,6 +136,12 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | A11 | Separa stem | Avviare separazione | Stem separati (⏭️ se manca demucs/torch → messaggio chiaro, no crash) | ☐ |
 | A12 | Metadati — leggi | Caricare file con tag | Tag mostrati | ☐ |
 | A13 | Metadati — scrivi | Modificare e salvare tag + copertina | Tag persistiti | ☐ |
+| A14 | **Metadati — selezione rapida** | Caricare un file grande (>200 MB) e uno piccolo; cliccare il grande e **subito** il piccolo; attendere; premere Salva | I campi mostrati restano quelli del file piccolo (il caricamento lento viene scartato); Salva scrive sul file **selezionato**, non su quello caricato per primo | ☐ |
+| A15 | **Metadati — rimuovi dalla lista** | Aggiungere 4 file, selezionare il 2°, "Rimuovi", poi cliccare le righe rimaste | Ogni riga seleziona il **proprio** file; l'ultima resta cliccabile; "Wipe sel." agisce sul file evidenziato | ☐ |
+| A16 | **Effetti voce a 48 kHz** | Convertire un file in Opus (o usare audio estratto da video), poi applicare un effetto voce (es. "Malvagia") | Durata **invariata** rispetto all'originale e intonazione corretta (prima si allungava di ~9% a 48 kHz e raddoppiava a 96 kHz) | ☐ |
+| A17 | **Modifica su .m4a** | Aprire un .m4a (memo vocale iPhone), fare trim/fade/muta/dividi | Operazioni completate e file scritto (prima fallivano tutte con errore ffmpeg sul formato) | ☐ |
+| A18 | Conversione — lista bloccata | Avviare un batch e provare Aggiungi/Rimuovi/Pulisci | I pulsanti rispondono "Conversione in corso"; conteggio e progresso restano coerenti | ☐ |
+| A19 | Modifica — cambio file durante il caricamento | Caricare un file lungo e cambiarne subito un altro | Durata/info mostrate sono quelle del **nuovo** file; "Applica" taglia sui tempi giusti | ☐ |
 
 ---
 

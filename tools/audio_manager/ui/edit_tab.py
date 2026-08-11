@@ -72,6 +72,10 @@ class EditTab(ctk.CTkFrame):
         self._play_obj                           = None
         self._playing:          bool             = False
         self._play_gen:         int              = 0
+        # Bumped whenever the loaded file changes, so a waveform/probe still
+        # running for the previous file cannot publish its duration and info
+        # over the newly selected one.
+        self._wf_gen:           int              = 0
         self._play_start_time:  float            = 0.0
         self._play_start_ms:    int              = 0
         self._after_id:         str | None       = None
@@ -535,6 +539,7 @@ class EditTab(ctk.CTkFrame):
 
     def _on_file_change(self, path: Path | None) -> None:
         self._stop()
+        self._wf_gen += 1        # invalidate a waveform load still in flight
         if not path:
             self._wf.clear()
             self._wf_info.configure(
@@ -555,23 +560,26 @@ class EditTab(ctk.CTkFrame):
 
         self._status.busy("Caricamento forma d'onda…")
         threading.Thread(
-            target=self._load_waveform, args=(path,), daemon=True
+            target=self._load_waveform, args=(path, self._wf_gen), daemon=True
         ).start()
 
-    def _load_waveform(self, path: Path) -> None:
+    def _load_waveform(self, path: Path, gen: int) -> None:
         try:
             info = self._engine.probe(path)
             pos, neg = self._engine.get_waveform_peaks(path, num_samples=900)
         except Exception as exc:
-            self.after(0, self._status.err, str(exc))
+            self.after(0, self._waveform_failed, gen, str(exc))
             return
-        self._info = info
-        dur_ms    = int(info.duration_s * 1000)
+        dur_ms = int(info.duration_s * 1000)
 
         def _apply():
+            # The user may have loaded another file while this was probing;
+            # publishing now would pin the old file's duration and info onto
+            # the new selection, and Applica would trim against them.
+            if gen != self._wf_gen:
+                return
+            self._info = info
             self._wf.load_peaks(pos, neg, dur_ms)
-            mins  = int(info.duration_s // 60)
-            secs  = info.duration_s % 60
             self._wf_info.configure(
                 text=f"{info.format.upper()}  ·  "
                      f"{info.sample_rate} Hz  ·  "
@@ -594,6 +602,11 @@ class EditTab(ctk.CTkFrame):
                 "poi premi 'Applica ed Esporta'")
 
         self.after(0, _apply)
+
+    def _waveform_failed(self, gen: int, msg: str) -> None:
+        if gen != self._wf_gen:
+            return
+        self._status.err(msg)
 
     # ── Waveform ↔ time inputs sync ────────────────────────────────────────
 
@@ -1020,14 +1033,39 @@ class EditTab(ctk.CTkFrame):
                 return
 
         voice_effect = self._voice_effect_var.get()
+
+        # Capture every slider/var HERE on the main thread — calling tkinter
+        # widget methods from a background thread crashes Tcl/Tk on Windows.
+        # (Same rule _play_preview already follows.)
+        try:
+            s_ms, e_ms = self._wf.get_trim_range()
+            params = {
+                "start_ms":      s_ms,
+                "end_ms":        e_ms,
+                "action":        self._sel_action_var.get(),
+                "eq":            self._eq_var.get(),
+                "bass":          self._bass.get(),
+                "mid":           self._mid.get(),
+                "treble":        self._treble.get(),
+                "gain":          self._gain_slider.get(),
+                "fade_in_ms":    int(self._fi_slider.get() * 1000),
+                "fade_out_ms":   int(self._fo_slider.get() * 1000),
+                "speed_enabled": self._speed_var.get(),
+                "speed":         self._speed_slider.get(),
+                "voice_effect":  voice_effect,
+            }
+        except Exception as exc:
+            self._status.err(f"Lettura parametri: {exc}")
+            return
+
         self._btn_apply.configure(state="disabled")
         self._status.busy("Applicazione effetti…")
         threading.Thread(
-            target=self._worker, args=(src, output, fmt, voice_effect), daemon=True
+            target=self._worker, args=(src, output, fmt, params), daemon=True
         ).start()
 
     def _worker(self, src: Path, output: Path, fmt: str,
-                voice_effect: str = "none") -> None:
+                params: dict) -> None:
         import shutil
         tmp_a   = None
         tmp_b   = None
@@ -1049,8 +1087,9 @@ class EditTab(ctk.CTkFrame):
             tmp_a = safe_tempfile(suffix=src.suffix)
             tmp_b = safe_tempfile(suffix=src.suffix)
 
-            s_ms, e_ms = self._wf.get_trim_range()
-            action     = self._sel_action_var.get()
+            s_ms, e_ms   = params["start_ms"], params["end_ms"]
+            action       = params["action"]
+            voice_effect = params["voice_effect"]
 
             if action == "trim":
                 if not step(lambda c, d: self._engine.trim(c, d, s_ms, e_ms)):
@@ -1059,27 +1098,27 @@ class EditTab(ctk.CTkFrame):
                 if not step(lambda c, d: self._engine.mute_region(c, d, s_ms, e_ms)):
                     return
 
-            if (self._eq_var.get()
+            if (params["eq"]
                     and self._deps.scipy and self._deps.soundfile):
                 if not step(lambda c, d: self._engine.apply_eq(
                         c, d,
-                        bass_db=self._bass.get(),
-                        mid_db=self._mid.get(),
-                        treble_db=self._treble.get())):
+                        bass_db=params["bass"],
+                        mid_db=params["mid"],
+                        treble_db=params["treble"])):
                     return
 
-            gain  = self._gain_slider.get()
-            fi_ms = int(self._fi_slider.get() * 1000)
-            fo_ms = int(self._fo_slider.get() * 1000)
+            gain  = params["gain"]
+            fi_ms = params["fade_in_ms"]
+            fo_ms = params["fade_out_ms"]
             if gain != 0 or fi_ms > 0 or fo_ms > 0:
                 if not step(lambda c, d: self._engine.adjust(
                         c, d,
                         gain_db=gain, fade_in_ms=fi_ms, fade_out_ms=fo_ms)):
                     return
 
-            if self._speed_var.get() and self._speed_slider.get() != 1.0:
+            if params["speed_enabled"] and params["speed"] != 1.0:
                 if not step(lambda c, d: self._engine.change_speed(
-                        c, d, speed=self._speed_slider.get())):
+                        c, d, speed=params["speed"])):
                     return
 
             if voice_effect != "none":
