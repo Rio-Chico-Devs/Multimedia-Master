@@ -30,6 +30,7 @@ survived transformers dropping the old lang_code_to_id dict.
 from __future__ import annotations
 
 from common.depmsg import pip_hint
+from .translate_engine import split_for_model
 
 _MODEL_NAME = "facebook/nllb-200-distilled-600M"
 
@@ -64,8 +65,6 @@ _DISPLAY_NAMES = {
 # model's token limit (which would silently truncate text). Splits after .!?…
 # when followed by whitespace; abbreviations occasionally cause an early split,
 # harmless since each fragment is still translated and rejoined in order.
-import re  # noqa: E402  (kept next to the pattern it defines, for locality)
-_SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
 _MAX_INPUT_TOKENS = 512
 
 
@@ -137,11 +136,6 @@ def display_name(iso_code: str) -> str:
     return _DISPLAY_NAMES.get(iso_code, iso_code)
 
 
-def _split_sentences(text: str) -> list[str]:
-    parts = [s.strip() for s in _SENTENCE_SPLIT.split(text)]
-    return [s for s in parts if s]
-
-
 def translate(text: str, src: str, tgt: str) -> str:
     if src not in _FLORES or tgt not in _FLORES:
         raise NllbUnavailable(f"NLLB-200 non supporta la coppia {src}->{tgt}.")
@@ -155,10 +149,15 @@ def translate(text: str, src: str, tgt: str) -> str:
     tgt_id = tok.convert_tokens_to_ids(_FLORES[tgt])
     tok.src_lang = _FLORES[src]
 
-    # Translate sentence by sentence so a long paragraph never overruns the
-    # token limit (which truncates text); rejoin in order with a single space.
+    # Translate chunk by chunk so a long paragraph never overruns the token
+    # limit (which truncates silently); rejoin in order with a single space.
+    # Sentence splitting alone is not enough: an OCR'd list or table cell can
+    # carry no terminal punctuation and still be far over the limit.
+    def _count(s: str) -> int:
+        return len(tok(s)["input_ids"])
+
     out_parts: list[str] = []
-    for sentence in _split_sentences(text) or [text]:
+    for sentence in split_for_model(text, _MAX_INPUT_TOKENS, _count):
         encoded = tok(sentence, return_tensors="pt",
                       truncation=True, max_length=_MAX_INPUT_TOKENS)
         with torch.no_grad():

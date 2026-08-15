@@ -42,6 +42,7 @@ dependency (transformers + torch), slower per paragraph.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 from functools import lru_cache
@@ -336,19 +337,81 @@ def clean_extracted_text(text: str, src: str) -> str:
     applies automatically. extract_sections() calls this so the pre-translation
     review screen already shows de-glued text — not just the final translation —
     since that screen is the user's only chance to fix garbled OCR before it
-    gets baked into the document. Re-running it later inside translate_text() on
-    already-cleaned text is harmless: whitespace squeezing is idempotent, and a
-    token that already split correctly is left whole (it has no more glue to
-    find)."""
+    gets baked into the document.
+
+    Text cleaned here must NOT be cleaned again on its way to the model: the
+    review screen invites the user to correct exactly the cases the cleanup got
+    wrong, and a second pass would just redo the damage (re-splitting a part
+    number they glued back together, re-"correcting" a technical term).
+    translate_sections() therefore marks these sections "cleaned" and calls
+    translate_text(preprocess=False)."""
     return _preprocess_source(text, src)
 
 
+# ── Input chunking for the big-model engines ─────────────────────────────────
+# nllb_engine and mbart_engine both feed a transformers tokenizer with a hard
+# input limit. Handing it a whole paragraph makes it TRUNCATE silently: the tail
+# is dropped, the call still succeeds, and the user gets a half-translated
+# paragraph reported as a success. Splitting first is the only way to avoid it.
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?…])\s+")
+
+
+def split_sentences(text: str) -> list[str]:
+    parts = [s.strip() for s in _SENTENCE_SPLIT.split(text)]
+    return [s for s in parts if s]
+
+
+def _fit_chunk(sentence: str, max_tokens: int, count_tokens, depth: int = 0) -> list[str]:
+    """Recursively break one sentence down until every piece fits."""
+    n = count_tokens(sentence)
+    if n <= max_tokens:
+        return [sentence]
+    words = sentence.split()
+    # A single token-monster word (or too many rounds) can't be split further —
+    # let the tokenizer truncate it rather than loop forever.
+    if len(words) < 2 or depth >= 4:
+        return [sentence]
+    # Token density is near-uniform inside a sentence, so one measurement is
+    # enough to pick the split count. Aim at 90% of the limit so tokenisation
+    # variance between pieces can't push one back over it.
+    n_chunks = max(2, math.ceil(n / (max_tokens * 0.9)))
+    per      = max(1, math.ceil(len(words) / n_chunks))
+    out: list[str] = []
+    for i in range(0, len(words), per):
+        piece = " ".join(words[i:i + per])
+        out.extend(_fit_chunk(piece, max_tokens, count_tokens, depth + 1))
+    return out
+
+
+def split_for_model(text: str, max_tokens: int, count_tokens) -> list[str]:
+    """Split `text` into chunks that each fit inside `max_tokens`.
+
+    Sentence boundaries first — that is where a translation model can be cut
+    without mangling meaning. But a "sentence" is only whatever sits between
+    two full stops, and OCR'd lists, table cells and headings often carry no
+    terminal punctuation at all, so one piece can still be far over the limit.
+    Those get split again on word boundaries. `count_tokens` is supplied by the
+    caller so each engine measures with its own tokenizer.
+    """
+    chunks: list[str] = []
+    for sentence in split_sentences(text) or [text.strip()]:
+        if sentence:
+            chunks.extend(_fit_chunk(sentence, max_tokens, count_tokens))
+    return [c for c in chunks if c]
+
+
 def _protect_glossary(text: str, glossary: dict[str, str]) -> tuple[str, dict[str, str]]:
+    # Longest term first. Substituting in dictionary order lets a short term
+    # swallow the start of a longer one that contains it — with "power" before
+    # "power unit", the text becomes "XPH0X unit" and "power unit" can never
+    # match again, silently losing the more specific translation the user
+    # actually wanted.
+    ordered = sorted(
+        ((t, r) for t, r in glossary.items() if t),
+        key=lambda tr: len(tr[0]), reverse=True)
     tokens: dict[str, str] = {}
     protected = text
-    for i, (term, repl) in enumerate(glossary.items()):
-        if not term:
-            continue
+    for i, (term, repl) in enumerate(ordered):
         token = f"XPH{i}X"
         protected, n = re.subn(rf"\b{re.escape(term)}\b", token, protected,
                                 flags=re.IGNORECASE)
@@ -359,15 +422,24 @@ def _protect_glossary(text: str, glossary: dict[str, str]) -> tuple[str, dict[st
 
 def translate_text(text: str, src: str, tgt: str,
                     glossary: dict[str, str] | None = None,
-                    engine: str = "argos") -> str:
+                    engine: str = "argos",
+                    preprocess: bool = True) -> str:
     """Translate one chunk of text (line/paragraph), honouring an optional
     glossary. `engine` is "argos" (default, small per-pair models),
     "mbart" (facebook/mbart-large-50-many-to-many-mmt, see mbart_engine.py) or
-    "nllb" (facebook/nllb-200-distilled-600M, see nllb_engine.py)."""
+    "nllb" (facebook/nllb-200-distilled-600M, see nllb_engine.py).
+
+    `preprocess=False` skips the OCR/PDF cleanup pass. Pass it whenever the
+    text has already been through clean_extracted_text() — above all when it
+    then passed through the manual-review screen, because re-running the
+    cleanup there would silently undo the user's own corrections: they fix a
+    part number the splitter wrongly broke up, and the splitter breaks it up
+    again on the way to the model."""
     if not text.strip():
         return text
 
-    text = _preprocess_source(text, src)
+    if preprocess:
+        text = _preprocess_source(text, src)
 
     def _mt(chunk: str) -> str:
         if engine == "mbart":

@@ -116,6 +116,10 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | P31 | Motore NLLB-200 — traduzione | Con transformers+torch installati, tradurre un PDF (en→it) con NLLB-200 | Modello scaricato una volta al primo uso, poi offline; traduzione più naturale/contestuale di Argos; paragrafi lunghi non troncati | ☐ |
 | P32 | Motore assente | Selezionare NLLB-200 o mBART-50 senza transformers/torch installati | Messaggio "non disponibile" con hint pip, nessun crash, nessuna lingua elencata (⏭️) | ☐ |
 | P33 | Correzione OCR | Tradurre/estrarre testo OCR con refusi a un carattere (es. "1n") con revisione manuale | Nella finestra di revisione "1n" appare già corretto in "In"; sigle/codici (BCS, 12V) restano invariati (⏭️ se manca pyspellchecker) | ☐ |
+| P34 | **Correzione manuale rispettata** | Nella revisione del testo estratto, riscrivere a mano una parola che la pulizia automatica aveva spezzato (es. un codice `POWERUNITS` diventato `POWER UNITS`), poi tradurre | Il PDF finale contiene **la tua versione**, non quella rispezzata dall'algoritmo | ☐ |
+| P35 | **Paragrafo lungo con mBART** | Tradurre un PDF con un paragrafo molto lungo (>400 parole) usando mBART-50 | Il paragrafo è tradotto **per intero**; prima la coda veniva persa in silenzio | ☐ |
+| P36 | Blocco senza punteggiatura | Tradurre una pagina con elenchi puntati / celle di tabella lunghe senza punto finale (NLLB o mBART) | Nessun troncamento: tutto il contenuto arriva tradotto | ☐ |
+| P37 | Glossario con termini annidati | In "Glossario" aggiungere sia `power`→`potenza` sia `power unit`→`gruppo motore`, poi tradurre un testo che contiene "power unit" | Esce **"gruppo motore"** (vince il termine più lungo), non "potenza unit" | ☐ |
 
 ---
 

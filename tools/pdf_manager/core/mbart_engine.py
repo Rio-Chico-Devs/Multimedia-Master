@@ -27,6 +27,9 @@ elsewhere ("it" -> "it_IT").
 from __future__ import annotations
 
 from common.depmsg import pip_hint
+from .translate_engine import split_for_model
+
+_MAX_INPUT_TOKENS = 512
 
 _MODEL_NAME = "facebook/mbart-large-50-many-to-many-mmt"
 
@@ -110,6 +113,8 @@ def display_name(iso_code: str) -> str:
 
 
 def translate(text: str, src: str, tgt: str) -> str:
+    if not text.strip():
+        return text
     tok = _load_tokenizer()
     langs = {code.split("_")[0]: code for code in tok.lang_code_to_id}
     if src not in langs or tgt not in langs:
@@ -119,11 +124,23 @@ def translate(text: str, src: str, tgt: str) -> str:
     import torch
 
     tok.src_lang = langs[src]
-    encoded = tok(text, return_tensors="pt", truncation=True, max_length=512)
-    with torch.no_grad():
-        generated = model.generate(
-            **encoded,
-            forced_bos_token_id=tok.lang_code_to_id[langs[tgt]],
-            max_new_tokens=512,
-        )
-    return tok.batch_decode(generated, skip_special_tokens=True)[0]
+    tgt_id = tok.lang_code_to_id[langs[tgt]]
+
+    # Chunk before encoding. Feeding a whole paragraph in one shot let the
+    # tokenizer truncate at the limit and drop the tail, so a long paragraph
+    # came back half translated with the call still reporting success.
+    def _count(s: str) -> int:
+        return len(tok(s)["input_ids"])
+
+    out_parts: list[str] = []
+    for chunk in split_for_model(text, _MAX_INPUT_TOKENS, _count):
+        encoded = tok(chunk, return_tensors="pt",
+                      truncation=True, max_length=_MAX_INPUT_TOKENS)
+        with torch.no_grad():
+            generated = model.generate(
+                **encoded,
+                forced_bos_token_id=tgt_id,
+                max_new_tokens=_MAX_INPUT_TOKENS,
+            )
+        out_parts.append(tok.batch_decode(generated, skip_special_tokens=True)[0])
+    return " ".join(p.strip() for p in out_parts if p.strip())

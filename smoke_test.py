@@ -233,6 +233,61 @@ def check_translation_cleanup() -> None:
     except Exception as exc:
         _record("FAIL", "NLLB language table", str(exc))
 
+    # A paragraph over the model's token limit must be split, not truncated —
+    # including one with no sentence-ending punctuation (OCR lists, tables).
+    try:
+        from core.translate_engine import split_for_model
+        def _count(s):
+            return len(s.split()) + 2
+        punct = " ".join(f"Sentence number {i} is here." for i in range(20))
+        plain = " ".join(f"word{i}" for i in range(200))
+        ok = True
+        for name, txt in (("punctuated", punct), ("unpunctuated", plain)):
+            parts = split_for_model(txt, 20, _count)
+            if len(parts) < 2 or any(_count(p) > 20 for p in parts):
+                ok = False
+            if " ".join(parts).split() != txt.split():
+                ok = False      # content lost or reordered
+        _record("PASS" if ok else "FAIL", "model input chunking",
+                "long paragraphs split without losing text")
+    except Exception as exc:
+        _record("FAIL", "model input chunking", str(exc))
+
+    # A short glossary term must not swallow a longer one containing it.
+    try:
+        from core.translate_engine import _protect_glossary
+        g = {"power": "potenza", "power unit": "gruppo motore"}
+        prot, toks = _protect_glossary("the power unit is here", g)
+        for tk, val in toks.items():
+            prot = prot.replace(tk, val)
+        ok = "gruppo motore" in prot and "potenza unit" not in prot
+        _record("PASS" if ok else "FAIL", "glossary longest-term-first", prot)
+    except Exception as exc:
+        _record("FAIL", "glossary longest-term-first", str(exc))
+
+    # Text already cleaned (and possibly hand-edited on the review screen) must
+    # not be run through the cleanup a second time.
+    try:
+        from core import translate_engine as _te
+        seen = []
+        _orig = _te._preprocess_source
+        _te._preprocess_source = lambda t, s: (seen.append(t), _orig(t, s))[1]
+        try:
+            import types as _types
+            _fake = _types.ModuleType("argostranslate.translate")
+            _fake.translate = lambda c, s, t: c
+            sys.modules.setdefault("argostranslate",
+                                   _types.ModuleType("argostranslate"))
+            sys.modules["argostranslate.translate"] = _fake
+            _te.translate_text("abc def", "en", "it", preprocess=False)
+            ok = not seen
+        finally:
+            _te._preprocess_source = _orig
+        _record("PASS" if ok else "FAIL", "review edits not re-cleaned",
+                "preprocess=False skips cleanup")
+    except Exception as exc:
+        _record("FAIL", "review edits not re-cleaned", str(exc))
+
 
 def check_audio_engine() -> None:
     print("\n[6] Audio engine (format mapping / ID3v1 / voice effects)")

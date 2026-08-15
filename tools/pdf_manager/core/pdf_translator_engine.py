@@ -349,6 +349,11 @@ def _group_into_paragraphs(lines: list[dict], src: str | None = None) -> list[di
             "color":      dominant["color"],
             "font":       dominant["font"],
             "removed":    False,
+            # Tells translate_sections() the cleanup already ran, so it is not
+            # applied a second time on the way to the model. That second pass
+            # would re-mangle whatever the user fixed by hand on the review
+            # screen — see translate_text(preprocess=...).
+            "cleaned":    src is not None,
         })
     return paragraphs
 
@@ -441,8 +446,13 @@ def translate_sections(
             # A single paragraph that the MT engine chokes on must not throw
             # away every other one already done — fall back to the source.
             try:
-                p["translated"] = translate_text(p["text"], src, tgt, glossary,
-                                                  engine=engine)
+                # Sections built by extract_sections(src=...) are already
+                # cleaned, and by this point the user may also have hand-edited
+                # them on the review screen — running the cleanup again would
+                # silently revert those edits.
+                p["translated"] = translate_text(
+                    p["text"], src, tgt, glossary, engine=engine,
+                    preprocess=not p.get("cleaned", False))
                 translated_ok += 1
             except Exception as exc:
                 p["translated"] = p["text"]
