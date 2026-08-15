@@ -538,10 +538,10 @@ class TranslateTab(ctk.CTkFrame):
     def _worker_load_model_langs(self, engine: str) -> None:
         mod = _MODEL_ENGINES[engine]
         try:
-            # available() checks only that the heavy deps import — it never
-            # loads the model, so for NLLB (static language table) selecting the
-            # engine costs nothing; the multi-GB download waits for the first
-            # real translation.
+            # available() checks only that the heavy deps import, and both
+            # engines' language_codes() are static tables — so selecting an
+            # engine loads nothing and, crucially, touches no network; the
+            # multi-GB download waits for the first real translation.
             codes = mod.language_codes() if mod.available() else {}
             self.after(0, self._model_langs_loaded, engine, codes, None)
         except Exception as exc:

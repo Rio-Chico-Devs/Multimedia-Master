@@ -59,6 +59,11 @@ class ExtractResult:
     sections:            list[dict]
     page_count:          int
     ocr_needed_missing:  int = 0
+    # Pages where OCR was available but blew up (out of memory on an oversized
+    # fold-out sheet, a corrupt image). Counted separately so they are reported
+    # instead of passing for "page with no text".
+    ocr_failed:          int = 0
+    ocr_error:           str = ""
 
 
 def _int_to_rgb(color: int) -> tuple[float, float, float]:
@@ -84,16 +89,28 @@ def _pick_font(orig_font_name: str) -> str:
 
 def _insert_autoshrink(page, rect, text: str, base_size: float,
                         color: tuple[float, float, float], fontname: str,
-                        rotate: int = 0) -> None:
+                        rotate: int = 0) -> bool:
+    """Write `text` into `rect`, shrinking the font until it fits.
+
+    Returns True only if the text was actually written. insert_textbox()
+    returns a negative value and writes NOTHING when the text cannot fit, so
+    the caller must know: by the time we get here the original content has
+    already been redacted away, and silently dropping the return code made the
+    paragraph vanish from the output PDF. A short label whose translation is
+    much longer than the source ("Speed" -> "Geschwindigkeit") cannot fit at
+    any size, which is the common case in tables and diagrams.
+    """
     size = max(base_size, _MIN_FONT_SIZE)
     while size >= _MIN_FONT_SIZE:
         rc = page.insert_textbox(rect, text, fontsize=size, fontname=fontname,
                                   color=color, align=0, rotate=rotate)
         if rc >= 0:
-            return
+            return True
         size -= 0.5
-    page.insert_textbox(rect, text, fontsize=_MIN_FONT_SIZE, fontname=fontname,
-                         color=color, align=0, rotate=rotate)
+    rc = page.insert_textbox(rect, text, fontsize=_MIN_FONT_SIZE,
+                              fontname=fontname, color=color, align=0,
+                              rotate=rotate)
+    return rc >= 0
 
 
 def _digital_text_lines(page) -> list[dict]:
@@ -388,6 +405,8 @@ def extract_sections(
         ocr_checked = False
         sections: list[dict] = []
         ocr_needed_missing = 0
+        ocr_failed = 0
+        ocr_error  = ""
 
         for i, page in enumerate(doc):
             if cancel_event is not None and cancel_event.is_set():
@@ -401,10 +420,16 @@ def extract_sections(
                 if ocr_ready:
                     try:
                         lines = _ocr_lines(page)
-                    except Exception:
-                        # OCR failed on this page — leave it untouched
-                        # rather than aborting the whole document.
+                    except Exception as exc:
+                        # OCR failed on this page — leave it untouched rather
+                        # than aborting the whole document, but COUNT it: an
+                        # uncounted failure is indistinguishable from a page
+                        # that simply had no text, so the page shipped
+                        # untranslated under a success message.
                         lines = []
+                        ocr_failed += 1
+                        if not ocr_error:
+                            ocr_error = str(exc)
                 elif include_scanned:
                     ocr_needed_missing += 1
 
@@ -416,7 +441,8 @@ def extract_sections(
                 progress_cb((i + 1) / total)
 
         return ExtractResult(sections=sections, page_count=doc.page_count,
-                              ocr_needed_missing=ocr_needed_missing)
+                              ocr_needed_missing=ocr_needed_missing,
+                              ocr_failed=ocr_failed, ocr_error=ocr_error)
     finally:
         doc.close()
 
@@ -494,6 +520,7 @@ def apply_translation(
 
     total = (page_count or doc.page_count) or 1
     pages_done = 0
+    overflow = 0        # paragraphs whose translation could not be made to fit
     try:
         for i, page in enumerate(doc):
             if cancel_event is not None and cancel_event.is_set():
@@ -529,10 +556,22 @@ def apply_translation(
                     link.pop("xref", None)
                     page.insert_link(link)
                 for p in paragraphs:
-                    _insert_autoshrink(
-                        page, p["rect"], p.get("translated", p["text"]),
+                    original = p["text"]
+                    written = _insert_autoshrink(
+                        page, p["rect"], p.get("translated", original),
                         base_size=p["size"], color=_int_to_rgb(p["color"]),
                         fontname=_pick_font(p["font"]), rotate=rot)
+                    if not written:
+                        # The translation cannot be made to fit at any size.
+                        # The original has already been redacted, so writing
+                        # nothing would delete the paragraph from the document.
+                        # Put the source text back — it demonstrably fitted at
+                        # its own size — and report it at the end.
+                        _insert_autoshrink(
+                            page, p["rect"], original,
+                            base_size=p["size"], color=_int_to_rgb(p["color"]),
+                            fontname=_pick_font(p["font"]), rotate=rot)
+                        overflow += 1
 
             pages_done = i + 1
             if progress_cb:
@@ -541,8 +580,15 @@ def apply_translation(
         cancelled = cancel_event is not None and cancel_event.is_set()
         doc.save(str(output_path))
         doc.close()
+        warning = ""
+        if overflow:
+            warning = (f"{overflow} sezione/i non tradotta/e nel file: la "
+                       f"traduzione non entrava nello spazio disponibile, "
+                       f"quindi è stato lasciato il testo originale.")
         return PdfResult(output=output_path, success=True, cancelled=cancelled,
-                          page_count=pages_done, file_size=output_path.stat().st_size)
+                          page_count=pages_done,
+                          file_size=output_path.stat().st_size,
+                          warning=warning)
     except Exception as exc:
         # Best-effort: keep whatever pages were already translated instead
         # of discarding the whole job on one fatal error.
@@ -634,6 +680,18 @@ class PdfTranslatorEngine:
                 error="Nessun testo trovato nel PDF: nessuna pagina conteneva "
                       "testo da tradurre.")
 
+        if cancelled and translated_ok == 0:
+            # Cancelled before a single paragraph was translated. Writing the
+            # file anyway produced a byte-for-byte copy of the source PDF that
+            # the UI then announced as "N pagine tradotte" — a plain untruth,
+            # and one that can overwrite a previous, real translation sitting
+            # at the same output path.
+            return PdfResult(
+                output=None, success=False, cancelled=True,
+                page_count=0,
+                error="Annullato prima che venisse tradotto qualcosa: "
+                      "nessun file è stato creato.")
+
         result = apply_translation(
             input_path, output_path, extracted.sections, extracted.page_count,
             # On cancel we still want the work already done to survive — the
@@ -644,8 +702,26 @@ class PdfTranslatorEngine:
             progress_cb=_scaled(0.8, 1.0))
         if cancelled:
             result.cancelled = True
-        if result.success and extracted.ocr_needed_missing > 0:
-            result.warning = (f"{extracted.ocr_needed_missing} pagina/e scansionata/e "
-                               f"ignorata/e: installa il motore OCR per tradurle "
-                               f"({pip_hint('rapidocr_onnxruntime')}).")
+        if result.success:
+            notes = [result.warning] if result.warning else []
+            if extracted.ocr_needed_missing > 0:
+                notes.append(
+                    f"{extracted.ocr_needed_missing} pagina/e scansionata/e "
+                    f"ignorata/e: installa il motore OCR per tradurle "
+                    f"({pip_hint('rapidocr_onnxruntime')}).")
+            if extracted.ocr_failed > 0:
+                notes.append(
+                    f"{extracted.ocr_failed} pagina/e scansionata/e non "
+                    f"riconosciuta/e (OCR fallito): sono rimaste nella lingua "
+                    f"originale.")
+            # A partial failure used to be discarded entirely whenever at least
+            # one paragraph had succeeded, so a PDF with hundreds of untranslated
+            # paragraphs was presented as a clean success.
+            if translate_errors > 0:
+                notes.append(
+                    f"{translate_errors} sezione/i su "
+                    f"{translated_ok + translate_errors} non tradotta/e, "
+                    f"lasciata/e nella lingua originale. "
+                    f"Dettaglio: {first_error}")
+            result.warning = "  ".join(notes)
         return result

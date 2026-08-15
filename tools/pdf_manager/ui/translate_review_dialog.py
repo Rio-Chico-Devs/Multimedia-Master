@@ -112,6 +112,13 @@ class _SectionCard(tk.Frame):
         self._box.configure(state="normal", height=_autosize(text))
         self._box.delete("1.0", "end")
         self._box.insert("1.0", text)
+        # These cards are pooled and rebound as the user pages through the
+        # document, and the widget was built with undo=True — so without
+        # clearing the stack, the delete/insert above stays undoable and
+        # Ctrl+Z eventually restores a DIFFERENT section's text into this box,
+        # which commit() then writes into the currently bound section.
+        self._box.edit_reset()
+        self._box.edit_modified(False)
         self._update_visual()
 
     # ── toggle / visuals ──────────────────────────────────────────────────────
@@ -184,8 +191,14 @@ class SectionReviewDialog(ctk.CTkToplevel):
         self.transient(parent)
         self.grab_set()
         self.protocol("WM_DELETE_WINDOW", self._cancel)
-        self.bind("<Left>", lambda _e: self._go(-1))
-        self.bind("<Right>", lambda _e: self._go(1))
+        # Page navigation must not steal the arrow keys from the section
+        # editors: a child widget's bindtags include its toplevel, and the Text
+        # class binding for <Left>/<Right> does not return "break", so a plain
+        # caret move inside a text box would ALSO flip to another PDF page.
+        self.bind("<Left>", self._nav_key(-1))
+        self.bind("<Right>", self._nav_key(1))
+        self.bind("<Prior>", lambda _e: self._go(-1))   # PgUp
+        self.bind("<Next>", lambda _e: self._go(1))     # PgDn
 
         ctk.CTkLabel(self, text=title, font=ctk.CTkFont(size=15, weight="bold"),
                      ).pack(pady=(14, 2))
@@ -272,6 +285,20 @@ class SectionReviewDialog(ctk.CTkToplevel):
     def _commit_visible(self) -> None:
         for card in self._pool[:self._visible]:
             card.commit()
+
+    def _nav_key(self, delta: int):
+        """Arrow-key page navigation that yields to whatever text box has
+        focus, so the arrows keep moving the caret while editing."""
+        def _handler(_event=None):
+            try:
+                if isinstance(self.focus_get(), tk.Text):
+                    return None
+            except Exception:
+                # focus_get() raises if focus is on a foreign/destroyed window
+                return None
+            self._go(delta)
+            return "break"
+        return _handler
 
     def _go(self, delta: int) -> None:
         if not self._pages:

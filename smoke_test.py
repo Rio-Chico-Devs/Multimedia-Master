@@ -265,6 +265,50 @@ def check_translation_cleanup() -> None:
     except Exception as exc:
         _record("FAIL", "glossary longest-term-first", str(exc))
 
+    # insert_textbox() writes NOTHING when the text cannot fit; the original is
+    # already redacted by then, so the return code must reach the caller.
+    try:
+        from core.pdf_translator_engine import _insert_autoshrink
+
+        class _Pg:
+            def __init__(self, fits):
+                self.fits = fits
+            def insert_textbox(self, rect, text, fontsize, fontname, color,
+                               align, rotate):
+                return 1.0 if self.fits(fontsize) else -1.0
+
+        fits_now   = _insert_autoshrink(_Pg(lambda s: True), None, "x", 10.0,
+                                        (0, 0, 0), "helv")
+        fits_small = _insert_autoshrink(_Pg(lambda s: s <= 7.0), None, "x", 12.0,
+                                        (0, 0, 0), "helv")
+        never      = _insert_autoshrink(_Pg(lambda s: False), None, "x", 9.0,
+                                        (0, 0, 0), "helv")
+        ok = fits_now is True and fits_small is True and never is False
+        _record("PASS" if ok else "FAIL", "autoshrink reports overflow",
+                f"fits={fits_now}, shrunk={fits_small}, never={never}")
+    except Exception as exc:
+        _record("FAIL", "autoshrink reports overflow", str(exc))
+
+    # Picking mBART in the engine menu must not load the tokenizer (which falls
+    # back to a network fetch) — the app advertises itself as fully offline.
+    try:
+        from core import mbart_engine as _me
+        _saved = _me._load_tokenizer
+
+        def _boom(*a, **k):
+            raise AssertionError("language_codes() loaded the tokenizer")
+
+        _me._load_tokenizer = _boom
+        try:
+            _codes = _me.language_codes()
+            ok = _codes.get("it") == "it_IT" and len(_codes) >= 50
+        finally:
+            _me._load_tokenizer = _saved
+        _record("PASS" if ok else "FAIL", "mBART language table static",
+                f"{len(_codes)} languages, no tokenizer load")
+    except Exception as exc:
+        _record("FAIL", "mBART language table static", str(exc))
+
     # Text already cleaned (and possibly hand-edited on the review screen) must
     # not be run through the cleanup a second time.
     try:

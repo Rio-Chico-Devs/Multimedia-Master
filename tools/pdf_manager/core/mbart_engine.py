@@ -36,6 +36,24 @@ _MODEL_NAME = "facebook/mbart-large-50-many-to-many-mmt"
 _tokenizer = None
 _model = None
 
+# The full mBART-50 language set (facebook/mbart-large-50-many-to-many-mmt),
+# ISO 639-1 -> the model's locale code. Kept here rather than read off the
+# tokenizer so the UI can list languages without loading — or downloading —
+# anything. Must match the model's own lang_code_to_id keys.
+_MBART50_LOCALES = {
+    "ar": "ar_AR", "cs": "cs_CZ", "de": "de_DE", "en": "en_XX", "es": "es_XX",
+    "et": "et_EE", "fi": "fi_FI", "fr": "fr_XX", "gu": "gu_IN", "hi": "hi_IN",
+    "it": "it_IT", "ja": "ja_XX", "kk": "kk_KZ", "ko": "ko_KR", "lt": "lt_LT",
+    "lv": "lv_LV", "my": "my_MM", "ne": "ne_NP", "nl": "nl_XX", "ro": "ro_RO",
+    "ru": "ru_RU", "si": "si_LK", "tr": "tr_TR", "vi": "vi_VN", "zh": "zh_CN",
+    "af": "af_ZA", "az": "az_AZ", "bn": "bn_IN", "fa": "fa_IR", "he": "he_IL",
+    "hr": "hr_HR", "id": "id_ID", "ka": "ka_GE", "km": "km_KH", "mk": "mk_MK",
+    "ml": "ml_IN", "mn": "mn_MN", "mr": "mr_IN", "pl": "pl_PL", "ps": "ps_AF",
+    "pt": "pt_XX", "sv": "sv_SE", "sw": "sw_KE", "ta": "ta_IN", "te": "te_IN",
+    "th": "th_TH", "tl": "tl_XX", "uk": "uk_UA", "ur": "ur_PK", "xh": "xh_ZA",
+    "gl": "gl_ES", "sl": "sl_SI",
+}
+
 # Display names for the Translate tab's language pickers. mBART-50 supports
 # more languages than this; codes without a friendly name here still work,
 # they just show their raw ISO 639-1 code instead of an Italian label.
@@ -103,9 +121,15 @@ def available() -> bool:
 
 
 def language_codes() -> dict[str, str]:
-    """ISO 639-1 code -> mBART-50 locale code, e.g. {"it": "it_IT"}."""
-    tok = _load_tokenizer()
-    return {code.split("_")[0]: code for code in tok.lang_code_to_id}
+    """ISO 639-1 code -> mBART-50 locale code, e.g. {"it": "it_IT"}.
+
+    Static on purpose, like nllb_engine's table. It used to read the codes off
+    the tokenizer, which meant merely PICKING mBART in the engine menu called
+    _load_tokenizer() — and that falls back to a network fetch when the model
+    is not cached yet. An app whose header reads "100% offline · nessun cloud"
+    must not open a connection because the user opened a dropdown; the download
+    belongs to the first real translation."""
+    return dict(_MBART50_LOCALES)
 
 
 def display_name(iso_code: str) -> str:
@@ -115,10 +139,10 @@ def display_name(iso_code: str) -> str:
 def translate(text: str, src: str, tgt: str) -> str:
     if not text.strip():
         return text
-    tok = _load_tokenizer()
-    langs = {code.split("_")[0]: code for code in tok.lang_code_to_id}
+    langs = _MBART50_LOCALES
     if src not in langs or tgt not in langs:
         raise MbartUnavailable(f"mBART-50 non supporta la coppia {src}->{tgt}.")
+    tok = _load_tokenizer()
 
     model = _load_model()
     import torch

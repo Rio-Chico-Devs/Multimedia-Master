@@ -120,6 +120,13 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | P35 | **Paragrafo lungo con mBART** | Tradurre un PDF con un paragrafo molto lungo (>400 parole) usando mBART-50 | Il paragrafo è tradotto **per intero**; prima la coda veniva persa in silenzio | ☐ |
 | P36 | Blocco senza punteggiatura | Tradurre una pagina con elenchi puntati / celle di tabella lunghe senza punto finale (NLLB o mBART) | Nessun troncamento: tutto il contenuto arriva tradotto | ☐ |
 | P37 | Glossario con termini annidati | In "Glossario" aggiungere sia `power`→`potenza` sia `power unit`→`gruppo motore`, poi tradurre un testo che contiene "power unit" | Esce **"gruppo motore"** (vince il termine più lungo), non "potenza unit" | ☐ |
+| P38 | **Testo che non entra** | Tradurre EN→DE (o EN→IT) un PDF con etichette brevi in tabelle/schemi (es. "Speed") | Nessuna etichetta **sparisce**: dove la traduzione non entra resta il testo originale, e a fine lavoro compare l'avviso "N sezione/i non tradotta/e… non entrava" | ☐ |
+| P39 | **Annulla subito** | Avviare una traduzione e premere Annulla entro 1-2 secondi (prima che traduca qualcosa) | Messaggio "Annullato prima che venisse tradotto qualcosa: nessun file è stato creato"; **nessun PDF di output** viene scritto (prima ne creava una copia non tradotta annunciata come "N pagine tradotte") | ☐ |
+| P40 | **Fallimenti parziali segnalati** | Tradurre con NLLB/mBART su una macchina con poca RAM, così alcune sezioni falliscono | Il risultato riporta "N sezione/i su M non tradotta/e, lasciata/e nella lingua originale" — non più successo pulito | ☐ |
+| P41 | OCR fallito su una pagina | Tradurre un PDF scansionato con una pagina enorme (poster/schema piegato) che manda l'OCR in errore | Avviso "N pagina/e scansionata/e non riconosciuta/e (OCR fallito)"; prima la pagina passava per "pagina senza testo" | ☐ |
+| P42 | **Frecce nella revisione** | Nella revisione manuale, cliccare in una casella di testo e premere ← / → | Il cursore si sposta **dentro il testo** e la pagina **non cambia**; PgUp/PgDn cambiano pagina | ☐ |
+| P43 | **Annulla (Ctrl+Z) nella revisione** | Andare a pagina 2, modificare una sezione, premere Ctrl+Z molte volte (più delle modifiche fatte) | Si annullano solo le **proprie** modifiche; non compare mai il testo di una sezione di un'altra pagina | ☐ |
+| P44 | mBART offline | Con transformers/torch installati ma modello mai scaricato, e **connessione disattivata**, selezionare mBART-50 dal menu Motore | Le lingue compaiono subito (52), **nessun tentativo di rete**, nessun errore | ☐ |
 
 ---
 
