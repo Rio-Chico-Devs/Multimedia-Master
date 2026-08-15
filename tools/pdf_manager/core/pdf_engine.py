@@ -194,14 +194,33 @@ class PdfEngine:
                     spec = spec.strip()
                     if not spec:
                         continue
-                    if "-" in spec:
-                        s, e = spec.split("-", 1)
-                        start, end = int(s) - 1, int(e) - 1
-                    else:
-                        start = end = int(spec) - 1
+                    try:
+                        if "-" in spec:
+                            s, e = spec.split("-", 1)
+                            first, last = int(s), int(e)
+                        else:
+                            first = last = int(spec)
+                    except ValueError:
+                        results.append(PdfResult(
+                            output=None, success=False,
+                            error=f"Intervallo non valido: '{spec}'."))
+                        continue
 
-                    start = max(0, start)
-                    end   = min(total - 1, end)
+                    # Reject instead of clamping into an empty range. Clamping
+                    # turned "5-3", "0" and "50-60" (on a 10-page file) into a
+                    # zero-page PDF that was written to disk and reported as a
+                    # success — the user got an unopenable file and no hint
+                    # that anything was wrong. An end past the last page is
+                    # still clamped: "1-999" sensibly means "to the end".
+                    if first < 1 or last < first or first > total:
+                        results.append(PdfResult(
+                            output=None, success=False,
+                            error=(f"Intervallo '{spec}' non valido per un PDF "
+                                   f"di {total} pagine.")))
+                        continue
+
+                    start = first - 1
+                    end   = min(last, total) - 1
 
                     writer = PdfWriter()
                     for i in range(start, end + 1):

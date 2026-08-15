@@ -137,6 +137,17 @@ def check_pypdf() -> None:
         except Exception as exc:
             _record("FAIL", "protect (AES-256)", str(exc))
 
+        # an invalid page range must be reported, never written as a 0-page PDF
+        try:
+            bad = eng.split_by_ranges(merged, "5-3, 0, 50-60, abc", tmp)
+            ok = bool(bad) and all(not r.success for r in bad) and len(bad) == 4
+            good = eng.split_by_ranges(merged, "1-2, 9-3, 3", tmp)
+            ok = ok and [r.success for r in good] == [True, False, True]
+            _record("PASS" if ok else "FAIL", "split invalid ranges rejected",
+                    f"{sum(1 for r in bad if not r.success)}/4 rejected")
+        except Exception as exc:
+            _record("FAIL", "split invalid ranges rejected", str(exc))
+
         # decrypt it back with the right password
         unlocked = tmp / "unlocked.pdf"
         try:
