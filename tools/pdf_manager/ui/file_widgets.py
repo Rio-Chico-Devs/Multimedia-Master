@@ -37,6 +37,20 @@ def _human_size(n: int) -> str:
 # ImageFileList
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _dropped_paths(widget, data) -> list[Path]:
+    """Parse a tkdnd <<Drop>> payload into paths.
+
+    The payload is a TCL list: paths containing spaces come brace-wrapped, so
+    splitting on whitespace tears them apart and the drop is silently lost.
+    tk.splitlist() applies TCL quoting rules and returns the real paths.
+    """
+    try:
+        tokens = widget.tk.splitlist(data or "")
+    except Exception:
+        tokens = (data or "").split()
+    return [Path(t) for t in tokens if t]
+
+
 class _ImgRow(ctk.CTkFrame):
     """One row in the ImageFileList."""
 
@@ -157,12 +171,8 @@ class ImageFileList(ctk.CTkFrame):
             self._add_paths(sorted(imgs))
 
     def _on_drop(self, event):
-        raw = event.data
-        # tkinterdnd2 wraps paths with braces when they contain spaces
         paths = []
-        for token in raw.strip().split():
-            token = token.strip("{}")
-            p = Path(token)
+        for p in _dropped_paths(self, event.data):
             if p.suffix.lower() in IMAGE_EXTS and p.is_file():
                 paths.append(p)
         self._add_paths(paths)
@@ -320,11 +330,8 @@ class PdfMergeList(ctk.CTkFrame):
             self._add_paths([Path(p) for p in paths])
 
     def _on_drop(self, event):
-        raw = event.data
         paths = []
-        for token in raw.strip().split():
-            token = token.strip("{}")
-            p = Path(token)
+        for p in _dropped_paths(self, event.data):
             if p.suffix.lower() == PDF_EXT and p.is_file():
                 paths.append(p)
         self._add_paths(paths)
@@ -466,10 +473,7 @@ class SingleFilePicker(ctk.CTkFrame):
             self.set_path(Path(p))
 
     def _on_drop(self, event):
-        raw = event.data
-        for token in raw.strip().split():
-            token = token.strip("{}")
-            p = Path(token)
+        for p in _dropped_paths(self, event.data):
             if p.suffix.lower() == PDF_EXT and p.is_file():
                 self.set_path(p)
                 return

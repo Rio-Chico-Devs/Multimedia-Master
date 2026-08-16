@@ -170,6 +170,23 @@ class ProtectTab(ctk.CTkFrame):
         self._btn_enc.configure(state=state)
         self._btn_dec.configure(state=state)
 
+    def _start_busy(self) -> bool:
+        """Claim the tab for one operation. False if one is already running.
+
+        Without this, a second click (the AES-256 clone takes several seconds
+        and the UI looks idle) started a second worker that opened the SAME
+        output path with "wb" while the first was still writing it, leaving a
+        truncated, unopenable PDF."""
+        if getattr(self, "_busy", False):
+            return False
+        self._busy = True
+        self._set_buttons_state("disabled")
+        return True
+
+    def _finish_busy(self) -> None:
+        self._busy = False
+        self._set_buttons_state("normal" if self._picker.get_path() else "disabled")
+
     def _toggle_show(self):
         show = "" if self._show_pw.get() else "•"
         self._user_pw.configure(show=show)
@@ -203,6 +220,8 @@ class ProtectTab(ctk.CTkFrame):
 
         output = self._resolve_output(self._enc_name.get().strip() or "protetto.pdf")
         if not self._confirm_overwrite(output):
+            return
+        if not self._start_busy():
             return
         # Capture EVERY tk variable on the main thread — reading them from
         # the worker thread is unsafe (Tcl/Tk is single-threaded).
@@ -239,6 +258,7 @@ class ProtectTab(ctk.CTkFrame):
                        "Il file di destinazione coincide con il file di "
                        "origine: l'operazione è stata annullata per non "
                        "sovrascrivere il PDF originale.")
+            self.after(0, self._finish_busy)
             return
         try:
             result = self._engine.protect(
@@ -257,6 +277,8 @@ class ProtectTab(ctk.CTkFrame):
                 self.after(0, self._status.err, result.error)
         except Exception as exc:
             self.after(0, self._status.err, str(exc))
+        finally:
+            self.after(0, self._finish_busy)
 
     # ── Run: decrypt ──────────────────────────────────────────────────────
 
@@ -269,6 +291,8 @@ class ProtectTab(ctk.CTkFrame):
         output     = self._resolve_output(
             self._dec_name.get().strip() or "sbloccato.pdf")
         if not self._confirm_overwrite(output):
+            return
+        if not self._start_busy():
             return
         self._status.busy("Rimozione protezione…")
         self.update_idletasks()
@@ -286,6 +310,7 @@ class ProtectTab(ctk.CTkFrame):
                        "Il file di destinazione coincide con il file di "
                        "origine: l'operazione è stata annullata per non "
                        "sovrascrivere il PDF originale.")
+            self.after(0, self._finish_busy)
             return
         try:
             result = self._engine.unlock(pdf, password, output,
@@ -301,6 +326,8 @@ class ProtectTab(ctk.CTkFrame):
                 self.after(0, self._status.err, result.error)
         except Exception as exc:
             self.after(0, self._status.err, str(exc))
+        finally:
+            self.after(0, self._finish_busy)
 
     def _clear_passwords(self):
         """Zero out password fields after a successful operation."""

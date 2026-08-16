@@ -95,6 +95,34 @@ def _make_pdf(path: Path, pages: int = 2) -> None:
 
 def check_pypdf() -> None:
     print("\n[3] pypdf code paths (merge / split / encrypt / decrypt)")
+    # Permission flags: denying everything must NOT produce -4, which is
+    # pypdf's "all permissions granted" value.
+    try:
+        from core.pdf_engine import (_PERM_ALL, _PERM_DENIABLE, _PERM_PRINT,
+                                     _PERM_PRINT_HQ, _PERM_EXTRACT)
+
+        def _flag(ap, ac):
+            v = _PERM_ALL & ~_PERM_DENIABLE
+            if ap: v |= _PERM_PRINT | _PERM_PRINT_HQ
+            if ac: v |= _PERM_EXTRACT
+            return v
+
+        def _bit(v, n):      # /P bit N is (1 << (N-1))
+            return ((v & 0xFFFFFFFF) >> (n - 1)) & 1
+
+        deny = _flag(False, False)
+        allow = _flag(True, True)
+        ok = (deny != _PERM_ALL
+              and _bit(deny, 3) == 0 and _bit(deny, 5) == 0
+              and _bit(deny, 4) == 0 and _bit(deny, 11) == 0
+              and _bit(deny, 10) == 1              # accessibility kept
+              and _bit(deny, 32) == 1              # reserved bits intact
+              and _bit(allow, 3) == 1 and _bit(allow, 5) == 1)
+        _record("PASS" if ok else "FAIL", "encryption permission flags",
+                f"deny={deny & 0xFFFFFFFF:#010x}, allow={allow & 0xFFFFFFFF:#010x}")
+    except Exception as exc:
+        _record("FAIL", "encryption permission flags", str(exc))
+
     try:
         from core.pdf_engine import PdfEngine
         from pypdf import PdfReader

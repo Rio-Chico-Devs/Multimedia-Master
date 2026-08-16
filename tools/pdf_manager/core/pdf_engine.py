@@ -14,6 +14,27 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+# ── Encryption permission flags (PDF /P field) ─────────────────────────────────
+# /P is a 32-bit signed integer whose bits are numbered from 1 at the LOW end,
+# so "bit N" is (1 << (N - 1)). Bits 1-2 are reserved-0 and bits 7-8 and 13-32
+# are reserved-1, which is why a well-formed value starts from all-reserved-set
+# and CLEARS what it denies rather than building up from zero.
+_PERM_ALL       = -4          # 0xFFFFFFFC: reserved bits set, everything granted
+_PERM_PRINT     = 1 << 2      # bit 3  — print
+_PERM_MODIFY    = 1 << 3      # bit 4  — modify contents
+_PERM_EXTRACT   = 1 << 4      # bit 5  — copy text / graphics
+_PERM_ANNOTATE  = 1 << 5      # bit 6  — add annotations
+_PERM_FORMS     = 1 << 8      # bit 9  — fill form fields
+_PERM_ASSEMBLE  = 1 << 10     # bit 11 — insert/rotate/delete pages
+_PERM_PRINT_HQ  = 1 << 11     # bit 12 — high-quality print
+
+# Everything protect() is willing to switch off. Bit 10 (extract for
+# accessibility) is deliberately NOT in here: denying it locks out screen
+# readers, and PDF 2.0 treats it as always granted anyway.
+_PERM_DENIABLE = (_PERM_PRINT | _PERM_MODIFY | _PERM_EXTRACT | _PERM_ANNOTATE
+                  | _PERM_FORMS | _PERM_ASSEMBLE | _PERM_PRINT_HQ)
+
+
 # ── Result dataclasses ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -309,16 +330,23 @@ class PdfEngine:
                 if strip_meta:
                     self._strip_writer_metadata(writer)
 
-                # Build permission flags (PDF spec bit positions)
-                perms = 0
-                if allow_print: perms |= (1 << 2) | (1 << 11)  # print + high quality
-                if allow_copy:  perms |= (1 << 4)               # copy text
+                # Start from "everything the UI can deny is denied" and grant
+                # back only what was ticked. The old code built the flag from
+                # 0 and fell back to -4 when nothing was requested — but -4
+                # (0xFFFFFFFC) is every permission bit SET, byte-for-byte
+                # pypdf's UserAccessPermissions.all(). Unticking both boxes,
+                # the most restrictive choice the UI offers, therefore produced
+                # the least restrictive PDF: printing, copying, modification
+                # and assembly all allowed.
+                perms = _PERM_ALL & ~_PERM_DENIABLE
+                if allow_print: perms |= _PERM_PRINT | _PERM_PRINT_HQ
+                if allow_copy:  perms |= _PERM_EXTRACT
 
                 writer.encrypt(
                     user_password=user_pw,
                     owner_password=owner_pw or user_pw,
                     algorithm="AES-256",   # R6, PDF 2.0 standard (R5 è una bozza deprecata)
-                    permissions_flag=perms if perms else -4,
+                    permissions_flag=perms,
                 )
                 with open(output, "wb") as f:
                     writer.write(f)

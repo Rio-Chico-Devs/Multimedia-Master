@@ -122,12 +122,21 @@ class EditorCanvas(tk.Frame):
 
     def load_state(self, state: PageState, zoom: float | None = None) -> None:
         """Display a new PageState (call after open or page change)."""
+        # A pending Ritaglia/Copia choice belongs to the page it was drawn on.
+        # Leaving it alive meant that turning the page (PgDn is bound globally)
+        # and then clicking "Ritaglia" applied the previous page's rectangle to
+        # the newly loaded one, cutting a region the user never selected.
+        self._cancel_choice()
         self._state = state
         if zoom is not None:
             self._zoom = zoom
         self._full_render()
 
     def set_zoom(self, zoom: float) -> None:
+        # Same reason as load_state(): the rubber band and the floating choice
+        # panel are positioned in canvas pixels, so after a re-scale they no
+        # longer line up with the region they refer to.
+        self._cancel_choice()
         self._zoom = zoom
         if self._state:
             self._full_render()
@@ -315,6 +324,21 @@ class EditorCanvas(tk.Frame):
                 self._cv.delete(self._rb_item)
                 self._rb_item = None
             else:
+                # Clamp to the page: the canvas is larger than the page at
+                # low zoom, and a rubber band dragged into the grey margin
+                # made PIL's crop() pad the overhang with BLACK, which then
+                # got painted over real content and saved into the PDF.
+                if self._state is None:
+                    self._cv.delete(self._rb_item)
+                    self._rb_item = None
+                    return
+                pw, ph = self._state.size
+                x0, x1 = max(0, min(x0, pw)), max(0, min(x1, pw))
+                y0, y1 = max(0, min(y0, ph)), max(0, min(y1, ph))
+                if x1 - x0 < 4 or y1 - y0 < 4:
+                    self._cv.delete(self._rb_item)
+                    self._rb_item = None
+                    return
                 # Keep the rubber-band visible and show choice panel
                 self._pending_sel = (x0, y0, x1, y1)
                 self._show_choice_panel(event.x, event.y)

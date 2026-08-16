@@ -95,6 +95,13 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | P15 | Proteggi (cifra) | Impostare password | PDF cifrato, richiede password all'apertura | ☐ |
 | P16 | Proteggi (decifra) | Rimuovere password da PDF cifrato | PDF apribile senza password | ☐ |
 | P17 | Analizza | Aprire un PDF | Testo, metadati, campi modulo, sintesi mostrati | ☐ |
+| P45 | **Permessi di protezione** | Proteggi: togliere **entrambe** le spunte (stampa e copia), cifrare, poi aprire il PDF e provare a stampare/copiare | Stampa e copia **bloccate** (prima toglierle le concedeva tutte); con "Consenti stampa" spuntata la stampa funziona | ☐ |
+| P46 | **Un PDF per immagine — sovrascrittura** | In una cartella con `foto.pdf` già esistente, convertire `foto.jpg` in modalità "Un PDF per immagine" | Viene creato `foto (1).pdf`; il `foto.pdf` esistente **non viene toccato** | ☐ |
+| P47 | **Drag&drop con spazi nel percorso** | Trascinare un file da una cartella con spazi nel nome (es. `Nuova cartella\Scansione 1.pdf`) | Il file viene aggiunto (prima il drop veniva ignorato in silenzio) | ☐ |
+| P48 | **Doppio click su Proteggi** | Selezionare un PDF grande, inserire password e cliccare "Proteggi PDF" due volte rapidamente | La seconda pressione è ignorata, i pulsanti si disabilitano fino alla fine; nessun PDF troncato | ☐ |
+| P49 | **Ritaglia sopra un ritaglio** | Modifica: ritagliare un blocco, spostarlo, poi ritagliare una regione che lo contiene e spostare il nuovo blocco | Sotto **non resta una copia** del primo blocco | ☐ |
+| P50 | **Selezione oltre il bordo** | Modifica: a zoom 50%, trascinare la selezione oltre il bordo della pagina nell'area grigia, poi Ritaglia | Nessuna **banda nera** nel blocco ritagliato né nel PDF salvato | ☐ |
+| P51 | **Selezione e cambio pagina** | Modifica: disegnare una selezione, poi premere PgDn (o ▶) **senza** scegliere, poi cliccare Ritaglia | Il pannello di scelta sparisce al cambio pagina; non viene ritagliato nulla sulla pagina nuova. Idem cambiando zoom | ☐ |
 
 ### 3c. Traduci (in-place, offline — richiede argostranslate)
 

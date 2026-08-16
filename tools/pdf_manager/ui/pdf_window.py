@@ -70,9 +70,17 @@ class PdfWindow(ctk.CTk):
 
     def _on_window_drop(self, event) -> None:
         """Route dropped files to the active tab's widget."""
-        raw = event.data or ""
-        paths = [Path(t.strip("{}")) for t in raw.strip().split()
-                 if t.strip("{}")]
+        # tkdnd hands over a TCL LIST, not a plain string: a path containing a
+        # space arrives brace-wrapped ("{C:/Nuova cartella/Scansione 1.jpg}").
+        # Splitting on whitespace shattered it into fragments that failed
+        # is_file(), so the drop was silently ignored — and spaces in paths are
+        # the norm on the Windows build. tk.splitlist() applies the right
+        # quoting rules (same call image_converter/ui/file_list.py already uses).
+        try:
+            tokens = self.tk.splitlist(event.data or "")
+        except Exception:
+            tokens = (event.data or "").split()
+        paths = [Path(t) for t in tokens if t]
 
         # Detect type of first file and forward accordingly
         pdfs   = [p for p in paths if p.suffix.lower() == ".pdf" and p.is_file()]

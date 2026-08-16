@@ -103,11 +103,35 @@ class PageState:
         # Crop from fully composed image so we capture existing snippets too
         region = self.compose().crop((x0, y0, x1, y1))
         snip   = Snippet(image=region.copy(), x=x0, y=y0)
-        self.snippets.append(snip)
 
         # Erase source area on background
         d = ImageDraw.Draw(self._bg)
         d.rectangle([x0, y0, x1 - 1, y1 - 1], fill=(255, 255, 255))
+
+        # The crop came from the COMPOSED page, so any existing snippet inside
+        # the rectangle is now baked into the new one. Erasing only _bg left
+        # the old snippet in place as well, so its pixels existed twice and
+        # dragging the new snippet away revealed a copy left behind.
+        # Fully-covered snippets are dropped; partially-covered ones keep only
+        # the part outside the rectangle.
+        survivors: list[Snippet] = []
+        for old_snip in self.snippets:
+            ox0, oy0 = old_snip.x, old_snip.y
+            ox1, oy1 = ox0 + old_snip.w, oy0 + old_snip.h
+            if ox0 >= x0 and oy0 >= y0 and ox1 <= x1 and oy1 <= y1:
+                continue                                  # fully absorbed
+            if ox1 <= x0 or ox0 >= x1 or oy1 <= y0 or oy0 >= y1:
+                survivors.append(old_snip)                # no overlap
+                continue
+            # Partial overlap: whiten the absorbed region of the old snippet
+            # so the shared pixels live only in the new one.
+            ImageDraw.Draw(old_snip.image).rectangle(
+                [max(x0 - ox0, 0), max(y0 - oy0, 0),
+                 min(x1 - ox0, old_snip.w) - 1, min(y1 - oy0, old_snip.h) - 1],
+                fill=(255, 255, 255))
+            survivors.append(old_snip)
+        self.snippets = survivors
+        self.snippets.append(snip)
 
         return snip
 

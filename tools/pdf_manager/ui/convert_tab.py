@@ -199,6 +199,12 @@ class ConvertTab(ctk.CTkFrame):
                     if per_file_output.resolve() == img.resolve():
                         fail += 1
                         continue
+                    # This path is built here rather than by the engine, so it
+                    # skips the engine's _unique_path() guard (which only runs
+                    # in one_per_file mode). Without this, converting
+                    # "fattura.jpg" in a folder that already holds an unrelated
+                    # "fattura.pdf" destroyed that PDF with no prompt.
+                    per_file_output = self._engine._unique_path(per_file_output)
                     try:
                         results = self._engine.images_to_pdf(
                             images=[img],
