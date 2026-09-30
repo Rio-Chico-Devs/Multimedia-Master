@@ -20,6 +20,8 @@ import shutil
 import subprocess
 import threading
 
+from common.version import PRODUCT_NAME
+
 
 def notify(title: str, message: str) -> None:
     """Show a desktop notification. Fire-and-forget; safe to call from any thread."""
@@ -49,7 +51,7 @@ def _run(cmd: list[str]) -> None:
 
 def _linux(title: str, message: str) -> None:
     if shutil.which("notify-send"):
-        _run(["notify-send", "-a", "Multimedia Master", title, message])
+        _run(["notify-send", "-a", PRODUCT_NAME, title, message])
 
 
 def _macos(title: str, message: str) -> None:
@@ -65,6 +67,10 @@ def _windows(title: str, message: str) -> None:
     # PowerShell toast — no third-party dependency needed.
     t = title.replace("'", "''")
     m = message.replace("'", "''")
+    # The toast's app label is whatever product this build is — escaped the
+    # same way as the user-supplied strings, since it is interpolated into
+    # the same single-quoted PowerShell literals.
+    _app_id = PRODUCT_NAME.replace("'", "''")
     script = (
         "[Windows.UI.Notifications.ToastNotificationManager, "
         "Windows.UI.Notifications, ContentType = WindowsRuntime] > $null; "
@@ -76,6 +82,6 @@ def _windows(title: str, message: str) -> None:
         f"$t[1].AppendChild($xml.CreateTextNode('{m}')) > $null; "
         "$toast = [Windows.UI.Notifications.ToastNotification]::new($xml); "
         "[Windows.UI.Notifications.ToastNotificationManager]::"
-        "CreateToastNotifier('Multimedia Master').Show($toast);"
+        f"CreateToastNotifier('{_app_id}').Show($toast);"
     )
     _run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script])

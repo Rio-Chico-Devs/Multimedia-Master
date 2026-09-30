@@ -38,13 +38,28 @@ Si costruisce dallo stesso `MultimediaMaster.spec` (variabile `MM_TARGET`).
 |----|------|-------|------------------|:----:|
 | P1 | Build PDF-only | Eseguire `build-pdf.bat` | Nessun errore; creato `dist\PdfManager\PdfManager.exe` e lo zip `PdfManager-<ver>-win64.zip` | ☐ |
 | P2 | Avvio diretto | Doppio click su `PdfManager.exe` | Si apre **direttamente** Gestione PDF — nessuna finestra launcher, nessuna console | ☐ |
-| P3 | Titolo finestra | Guardare la barra del titolo | Dice solo `Gestione PDF` — **non** deve comparire "Multimedia Master" | ☐ |
-| P4 | Finestra Informazioni | Click sulla ⓘ in alto a destra | Dice `PDF Manager` + versione — **non** "Multimedia Master" | ☐ |
+| P3 | Titolo finestra | Guardare la barra del titolo | Dice solo `Gestione PDF` | ☐ |
+| P4 | Finestra Informazioni | Click sulla ⓘ in alto a destra | Dice `PDF Manager` + versione | ☐ |
 | P5 | Funzioni PDF complete | Provare ogni scheda (modifica, converti, traduci, unisci, dividi, proteggi, analizza) | Tutto funziona come nella suite completa | ☐ |
 | P6 | OCR incluso | Analizza/traduci un PDF scansionato | L'OCR funziona (rapidocr è incluso anche in questa build) | ☐ |
-| P7 | Niente audio/immagini | Ispezionare `dist\PdfManager\` | Nessuna traccia di `ffmpeg`, `scipy`, `pydub`, `soundfile`; cartella sensibilmente più piccola di `dist\MultimediaMaster\` | ☐ |
-| P8 | Log di crash separati | Provocare un errore | Log in `logs\pdf_manager_crash.log` accanto all'exe (ripiego: `%TEMP%\PdfManager\logs`, **non** `%TEMP%\MultimediaMaster`) | ☐ |
-| P9 | Suite non regredita | Rifare `build.bat` dopo `build-pdf.bat` | La suite completa si costruisce e funziona esattamente come prima (le due build non si disturbano: workpath e dist separati) | ☐ |
+| P7 | Niente audio | Ispezionare `dist\PdfManager\` | Nessun `ffmpeg.exe`, nessun `scipy`/`pydub`/`soundfile`; cartella sensibilmente più piccola di `dist\MultimediaMaster\` | ☐ |
+
+**Nessuna traccia degli altri strumenti** — il cliente che compra solo questo
+non deve trovare da nessuna parte il nome della suite né i tool che non ha
+acquistato. Verifiche mirate:
+
+| ID | Test | Passi | Risultato atteso | Esito |
+|----|------|-------|------------------|:----:|
+| P8 | Ricerca testuale | In PowerShell, dentro `dist\PdfManager`: `Get-ChildItem -Recurse -File \| Select-String -Pattern "multimedia","image_converter","audio_manager" -List` | **Nessun risultato** | ☐ |
+| P9 | Cartella impostazioni | Usare l'app, poi guardare in `C:\Users\<nome>` | Esiste `.pdf_manager\settings.json` — **non** `.multimedia_master` | ☐ |
+| P10 | Log di crash | Provocare un errore | Log in `logs\pdf_manager_crash.log` accanto all'exe (ripiego: `%TEMP%\PdfManager\logs`) | ☐ |
+| P11 | Notifica desktop | Far finire un lavoro lungo con la finestra in secondo piano | Il toast di Windows è attribuito a `PDF Manager` | ☐ |
+| P12 | Niente file da sviluppatore | Ispezionare `dist\PdfManager\` | Nessun `assets\generate_icon.py`, nessun `vendor\rapidocr\README.md` | ☐ |
+
+| ID | Test | Passi | Risultato atteso | Esito |
+|----|------|-------|------------------|:----:|
+| P13 | Suite non regredita | Rifare `build.bat` dopo `build-pdf.bat` | Si costruisce e funziona come prima; titolo e Informazioni dicono ancora `Multimedia Master`; le impostazioni restano in `.multimedia_master` (nessuno perde le preferenze salvate) | ☐ |
+| P14 | Chiavi di licenza | Se sono già state emesse chiavi per la suite, riprovarne una | Continua a essere valida (il "sale" della suite non è cambiato). Una chiave della suite **non** deve attivare il PDF Manager e viceversa | ☐ |
 
 ---
 

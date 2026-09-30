@@ -6,7 +6,7 @@ import customtkinter as ctk
 
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT / "tools"))
-from common.version import __version__
+from common.version import __version__, PRODUCT_NAME
 from common.ui.geometry import fit_window
 from common.ui.icon import apply_icon
 from common.ui.about import add_about_button
@@ -73,7 +73,7 @@ class Launcher(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Multimedia Master")
+        self.title(PRODUCT_NAME)
         apply_icon(self)
         fit_window(self, 900, 380, 640, 320)
         add_about_button(self)
@@ -84,7 +84,7 @@ class Launcher(ctk.CTk):
     # ── Build ──────────────────────────────────────────────────────────────────
 
     def _build(self) -> None:
-        ctk.CTkLabel(self, text="Multimedia Master",
+        ctk.CTkLabel(self, text=PRODUCT_NAME,
                      font=ctk.CTkFont(size=26, weight="bold")).pack(pady=(28, 2))
         ctk.CTkLabel(self, text="Il tuo studio multimediale  ·  100% offline",
                      text_color="#555",
@@ -213,4 +213,4 @@ if __name__ == "__main__":
         # already does this for itself; the launcher needs its own.
         from common.crashlog import install as _install_crashlog, run_gui as _run_gui
         _install_crashlog(crash_log_path("launcher"))
-        _run_gui(Launcher, "Multimedia Master")
+        _run_gui(Launcher, PRODUCT_NAME)

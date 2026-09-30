@@ -1,9 +1,9 @@
 """
 Subprocess helpers shared across tools.
 
-The single reason this module exists: on Windows, console programs like
-ffmpeg.exe and powershell.exe pop a black console window for a fraction of
-a second on every invocation — even when the parent app is built --windowed.
+The single reason this module exists: on Windows, a console program (e.g.
+powershell.exe) pops a black console window for a fraction of a second on
+every invocation — even when the parent app is built --windowed.
 That looks broken in a shipped product. NO_WINDOW carries the platform flag
 that suppresses it; it's an empty dict everywhere except Windows, so call
 sites can splat it unconditionally:
@@ -27,9 +27,9 @@ def harden_subprocess_stdin() -> None:
     get DEVNULL instead of inheriting the parent's stdin handle.
 
     Only matters in a frozen --windowed build: there is no console, so the
-    process's stdin handle is invalid. Dependencies that shell out without
-    passing stdin= explicitly (pydub's AudioSegment.from_file -> ffmpeg)
-    inherit that broken handle and the child hangs forever waiting on it —
+    process's stdin handle is invalid. A dependency that shells out to a
+    command-line tool without passing stdin= explicitly inherits that broken
+    handle and the child hangs forever waiting on it —
     no exception is ever raised, so nothing reaches crashlog; the UI just
     looks stuck. Call once at startup, before any such dependency is used.
     """

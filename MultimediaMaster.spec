@@ -59,13 +59,26 @@ if TARGET not in ("all", "pdf"):
         f"MM_TARGET must be 'all' or 'pdf', got {TARGET!r}. "
         "Use build.bat (full suite) or build-pdf.bat (PDF Manager only).")
 
-# (entry script, exe/folder name, product name shown in the build output)
-_ENTRY, _NAME, _LABEL = {
-    "all": ("launcher.py",     "MultimediaMaster", "Multimedia Master (full suite)"),
-    "pdf": ("pdf_launcher.py", "PdfManager",       "PDF Manager (standalone)"),
+# Per-target identity.
+#   _ENTRY    PyInstaller entry script (compiled into the archive, never
+#             shipped as readable source next to the exe)
+#   _NAME     exe and dist/ folder name
+#   _PRODUCT  display name — title bars, About box, desktop notifications
+#   _SLUG     filesystem-safe id: ~/.<slug>/settings.json and license salt.
+#             The suite's slug MUST stay "multimedia_master" or existing
+#             installs lose their saved settings and their issued keys.
+#   _ALONE    True when the build holds a single tool and is sold on its own.
+#             Shipped code describes itself this way rather than referring to
+#             a multi-tool build, so a standalone install never hints that
+#             other products exist.
+_ENTRY, _NAME, _PRODUCT, _SLUG, _ALONE = {
+    "all": ("launcher.py",     "MultimediaMaster",
+            "Multimedia Master", "multimedia_master", False),
+    "pdf": ("pdf_launcher.py", "PdfManager",
+            "PDF Manager",       "pdf_manager",       True),
 }[TARGET]
 
-print(f"[spec] MM_TARGET={TARGET} -> building {_LABEL}")
+print(f"[spec] MM_TARGET={TARGET} -> building {_PRODUCT} ({_NAME})")
 
 # The PDF Manager needs only its own tree plus the shared common/ package
 # (crash log, OCR, settings, window icon) — it imports nothing from
@@ -81,7 +94,30 @@ else:
     datas = [
         (str(ROOT / "tools"), "tools"),
     ]
-datas.append((str(ROOT / "assets"), "assets"))
+# Only the icon itself — assets/generate_icon.py is a developer tool for
+# regenerating it and has no business sitting in a customer's install folder.
+datas.append((str(ROOT / "assets" / "icon.ico"), "assets"))
+
+# Product identity, written into the bundle rather than hardcoded in
+# tools/common/version.py, which both products ship verbatim. See that
+# module's docstring for why: the standalone PDF Manager must not carry the
+# suite's name anywhere a customer could find it.
+# `workpath` is injected by PyInstaller and is per-target (build.bat passes
+# --workpath), which keeps one product's stamp out of the other's build.
+# Defaulted defensively so the spec still works if invoked by hand.
+_STAMP_DIR = Path(globals().get("workpath") or (ROOT / "build")) / "_stamp"
+_STAMP_DIR.mkdir(parents=True, exist_ok=True)
+_STAMP = _STAMP_DIR / "_stamp.py"
+_STAMP.write_text(
+    '"""Product identity — GENERATED AT BUILD TIME by the build spec.\n'
+    'Do not edit and do not commit: it is rewritten on every build."""\n'
+    f"PRODUCT_NAME = {_PRODUCT!r}\n"
+    f"PRODUCT_SLUG = {_SLUG!r}\n"
+    f"IS_STANDALONE = {_ALONE!r}\n",
+    encoding="utf-8",
+)
+datas.append((str(_STAMP), "tools/common"))
+
 binaries = []
 hiddenimports = []
 
@@ -158,9 +194,19 @@ for _pkg in _THIRD_PARTY:
 # own stock Chinese+English model is already collected above regardless, so
 # the build still succeeds and OCR still works for English without this —
 # this only improves accented-Latin-script recognition.
+#
+# Only the model files themselves are collected, by name. Copying the whole
+# folder would also ship vendor/rapidocr/README.md — build instructions
+# addressed to whoever packages the exe, which that file opens by saying it
+# is "not for end users" — into every customer's install directory.
+# common.ocr_engine checks for each of these individually and falls back to
+# the stock model for any that is absent, so shipping a subset (or none) is
+# safe.
 _VENDOR_RAPIDOCR = ROOT / "vendor" / "rapidocr"
-if _VENDOR_RAPIDOCR.is_dir():
-    datas.append((str(_VENDOR_RAPIDOCR), "vendor/rapidocr"))
+for _model in ("det.onnx", "rec.onnx", "keys.txt", "cls.onnx"):
+    _model_path = _VENDOR_RAPIDOCR / _model
+    if _model_path.is_file():
+        datas.append((str(_model_path), "vendor/rapidocr"))
 
 a = Analysis(
     [_ENTRY],

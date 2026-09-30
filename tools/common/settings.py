@@ -1,9 +1,11 @@
 """
-Persistent application settings — shared by every Multimedia Master tool.
+Persistent application settings — shared by every tool in this project.
 
-A single JSON file lives at ~/.multimedia_master/settings.json. Each tool reads
-and writes its own namespace (e.g. "image_converter", "audio_manager"), so keys
-from different tools never collide.
+A single JSON file lives at ~/.<product-slug>/settings.json, one folder per
+product built from this tree (see common.version), so a customer who
+installed one product never gets a folder named after another. Each tool
+reads and writes its own namespace inside that file, so keys from different
+tools never collide.
 
 Design goals:
   • Never raise. A missing/corrupt file yields defaults; a failed write is
@@ -15,7 +17,7 @@ Design goals:
 
 Usage:
     from common.settings import Settings
-    s = Settings("image_converter")
+    s = Settings("pdf_manager")
     fmt = s.get("last_format", "WebP")
     s.set(last_format="JPEG", quality=90)   # persisted immediately
     s.add_recent("/path/to/folder")         # bounded MRU list under "recent"
@@ -31,7 +33,13 @@ import threading
 from pathlib import Path
 from typing import Any
 
-_CONFIG_DIR  = Path.home() / ".multimedia_master"
+from common.version import PRODUCT_SLUG
+
+# One settings folder per product, named after the running build (see
+# common.version). Each product's slug is fixed at build time and must never
+# change afterwards, or existing installs stop finding the settings they
+# already saved.
+_CONFIG_DIR  = Path.home() / f".{PRODUCT_SLUG}"
 _CONFIG_FILE = _CONFIG_DIR / "settings.json"
 _LOCK        = threading.RLock()
 _RECENT_MAX  = 12

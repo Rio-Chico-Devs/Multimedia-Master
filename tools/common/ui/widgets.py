@@ -1,5 +1,5 @@
 """
-Shared UI primitives used by all Multimedia Master tools.
+Shared UI primitives used by every tool in this project.
 
 Both app.py files add tools/ to sys.path so this is importable as:
     from common.ui.widgets import SectionLabel, Separator, StatusBar

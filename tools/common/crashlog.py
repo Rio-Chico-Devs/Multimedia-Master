@@ -1,5 +1,5 @@
 """
-Shared crash logger for every Multimedia Master tool.
+Shared crash logger for every tool in this project.
 
 On Windows each tool runs as a subprocess with no visible console, so
 without this file ALL exceptions — including C-extension crashes — are
@@ -123,8 +123,8 @@ def run_gui(factory, tool_label: str) -> None:
     logged entry + a visible error dialog instead of a window that silently
     vanishes. `factory` is a zero-arg callable returning the root window.
 
-    Re-raises after reporting, so the process still exits non-zero (the
-    launcher uses that to flag the failure too).
+    Re-raises after reporting, so the process still exits non-zero (whatever
+    started the tool uses that to flag the failure too).
     """
     try:
         app = factory()

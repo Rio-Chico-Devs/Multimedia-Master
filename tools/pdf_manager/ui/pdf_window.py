@@ -18,7 +18,7 @@ import customtkinter as ctk
 from common.ui.geometry import fit_window
 from common.ui.icon import apply_icon
 from common.ui.about import add_about_button
-from common.version import is_standalone
+from common.version import IS_STANDALONE, PRODUCT_NAME
 
 from .edit_tab      import EditTab
 from .convert_tab   import ConvertTab
@@ -37,10 +37,10 @@ class PdfWindow(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        # Inside the suite the title says which tool this window belongs to;
-        # as a standalone product there is no suite to belong to.
-        self.title("Gestione PDF" if is_standalone()
-                   else "Gestione PDF — Multimedia Master")
+        # When this tool is one of several in a product, the title says
+        # which product it belongs to; on its own it has nothing to qualify.
+        self.title("Gestione PDF" if IS_STANDALONE
+                   else f"Gestione PDF — {PRODUCT_NAME}")
         apply_icon(self)
         fit_window(self, 960, 680, 760, 520)
         add_about_button(self, "Gestione PDF")
@@ -79,7 +79,7 @@ class PdfWindow(ctk.CTk):
         # Splitting on whitespace shattered it into fragments that failed
         # is_file(), so the drop was silently ignored — and spaces in paths are
         # the norm on the Windows build. tk.splitlist() applies the right
-        # quoting rules (same call image_converter/ui/file_list.py already uses).
+        # quoting rules.
         try:
             tokens = self.tk.splitlist(event.data or "")
         except Exception:

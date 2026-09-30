@@ -28,9 +28,15 @@ import hashlib
 import sys
 
 from common.settings import Settings
+from common.version import PRODUCT_SLUG
 
 # Not a real secret — embedded in the distributed app. See module docstring.
-_SECRET = "multimedia-master-2025-license-salt"
+#
+# Derived from the running product's slug rather than hardcoded, so a key
+# issued for one product cannot unlock a different one. Each product's slug
+# is fixed at build time and must never change afterwards, or every key
+# already issued for it stops validating.
+_SECRET = f"{PRODUCT_SLUG.replace('_', '-')}-2025-license-salt"
 
 _settings = Settings("license")
 

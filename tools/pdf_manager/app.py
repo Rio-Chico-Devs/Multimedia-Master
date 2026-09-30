@@ -12,9 +12,9 @@ from common.crashlog import install as _install_crashlog, run_gui as _run_gui
 from common.paths import crash_log_path
 _install_crashlog(crash_log_path("pdf_manager"))
 
-# Frozen-build hardening: dependencies that shell out (e.g. pydub -> ffmpeg)
-# without setting stdin hang forever (not crash) in a windowed build with no
-# console.
+# Frozen-build hardening: a dependency that shells out to a command-line
+# tool without setting stdin hangs forever (it does not crash) in a windowed
+# build with no console.
 from common.proc import harden_subprocess_stdin as _harden_stdin
 _harden_stdin()
 

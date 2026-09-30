@@ -23,11 +23,13 @@ def exe_dir() -> Path:
 
 def _data_dir_name() -> str:
     """Per-user data folder name, distinct for each product built from this
-    source tree (the full suite and the standalone PDF Manager), so their
-    fallback logs never land in the same directory."""
+    source tree, so two installed products never share a log directory — and
+    so one product's folder never carries another's name."""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).stem   # MultimediaMaster | PdfManager
-    return "MultimediaMaster"
+        # The exe's own name, which the spec sets per product.
+        return Path(sys.executable).stem
+    from common.version import PRODUCT_SLUG
+    return PRODUCT_SLUG
 
 
 def icon_path() -> Path:
