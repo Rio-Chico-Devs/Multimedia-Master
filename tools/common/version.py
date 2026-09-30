@@ -35,7 +35,14 @@ def _identity() -> tuple[str, str, bool]:
     except ImportError:
         # Dev mode: tools/common/version.py -> repo root.
         folder = Path(__file__).resolve().parents[2].name
-        return folder.replace("-", " "), folder.replace("-", "_").lower(), False
+        name = folder.replace("-", " ")
+        # A checkout unzipped from a lowercase archive name would otherwise
+        # put "multimedia master" in the title bar. Only touch it when the
+        # folder carries no capitals of its own, so a deliberately-cased
+        # directory name is left exactly as the developer wrote it.
+        if name == name.lower():
+            name = name.title()
+        return name, folder.replace("-", "_").lower(), False
 
 
 #: Name shown to the user (title bars, About box, desktop notifications).
