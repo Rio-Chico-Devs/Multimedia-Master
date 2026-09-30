@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import customtkinter as ctk
 
-from common.version import __version__, __build_year__, APP_NAME
+from common.version import __version__, __build_year__, is_standalone, product_name
 
 
 def show_about(parent, tool_label: str | None = None) -> None:
@@ -13,7 +13,10 @@ def show_about(parent, tool_label: str | None = None) -> None:
     win.transient(parent)
     win.grab_set()
 
-    title = APP_NAME + (f" — {tool_label}" if tool_label else "")
+    # In a standalone build the product *is* the tool, so appending the tool
+    # label would just say the same thing twice ("PDF Manager — Gestione PDF").
+    name = product_name()
+    title = name if is_standalone() or not tool_label else f"{name} — {tool_label}"
     ctk.CTkLabel(win, text=title, font=ctk.CTkFont(size=16, weight="bold")
                  ).pack(pady=(24, 4), padx=36)
     ctk.CTkLabel(win, text=f"Versione {__version__}",

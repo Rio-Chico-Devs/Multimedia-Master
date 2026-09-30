@@ -21,6 +21,15 @@ def exe_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def _data_dir_name() -> str:
+    """Per-user data folder name, distinct for each product built from this
+    source tree (the full suite and the standalone PDF Manager), so their
+    fallback logs never land in the same directory."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).stem   # MultimediaMaster | PdfManager
+    return "MultimediaMaster"
+
+
 def icon_path() -> Path:
     """Path to the app icon, stable across dev mode and frozen builds."""
     return exe_dir() / "assets" / "icon.ico"
@@ -38,7 +47,7 @@ def crash_log_path(tool_name: str) -> Path:
             # without admin rights) — fall back to a per-user writable dir
             # rather than crash before the crash logger even exists.
             import tempfile
-            fallback = Path(tempfile.gettempdir()) / "MultimediaMaster" / "logs"
+            fallback = Path(tempfile.gettempdir()) / _data_dir_name() / "logs"
             fallback.mkdir(parents=True, exist_ok=True)
             return fallback / f"{tool_name}_crash.log"
     return exe_dir() / "tools" / tool_name / "crash.log"

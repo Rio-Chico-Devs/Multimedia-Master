@@ -11,6 +11,8 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 
 **Setup ambiente:** eseguire `setup.bat` (Windows) una volta — crea `venv` e installa tutto (core + opzionali + PyInstaller). Poi `build.bat` attiva il venv da solo.
 
+**Due prodotti, una sola build:** `build.bat` produce la suite completa (`dist\MultimediaMaster\`), `build-pdf.bat` il solo Gestione PDF come prodotto a sé (`dist\PdfManager\`). Entrambi usano lo stesso `MultimediaMaster.spec`, così l'elenco delle dipendenze resta in un posto solo.
+
 ---
 
 ## 0. Build & avvio (packaging)
@@ -26,6 +28,23 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 | B4 | Avvio tool da exe | Click su ogni card | Ogni tool si apre come finestra separata | ☐ |
 | B5 | Log di crash scrivibili | Provocare un errore o controllare dopo l'uso | I log finiscono in `logs\<tool>_crash.log` accanto all'exe (o in `%TEMP%\MultimediaMaster\logs` se installato in cartella protetta) | ☐ |
 | B6 | Avvio da sorgente | `python launcher.py` | Identico comportamento alla versione compilata | ☐ |
+
+### 0b. Build separata del solo PDF Manager
+
+Prodotto a sé, senza launcher e senza convertitore immagini / audio manager.
+Si costruisce dallo stesso `MultimediaMaster.spec` (variabile `MM_TARGET`).
+
+| ID | Test | Passi | Risultato atteso | Esito |
+|----|------|-------|------------------|:----:|
+| P1 | Build PDF-only | Eseguire `build-pdf.bat` | Nessun errore; creato `dist\PdfManager\PdfManager.exe` e lo zip `PdfManager-<ver>-win64.zip` | ☐ |
+| P2 | Avvio diretto | Doppio click su `PdfManager.exe` | Si apre **direttamente** Gestione PDF — nessuna finestra launcher, nessuna console | ☐ |
+| P3 | Titolo finestra | Guardare la barra del titolo | Dice solo `Gestione PDF` — **non** deve comparire "Multimedia Master" | ☐ |
+| P4 | Finestra Informazioni | Click sulla ⓘ in alto a destra | Dice `PDF Manager` + versione — **non** "Multimedia Master" | ☐ |
+| P5 | Funzioni PDF complete | Provare ogni scheda (modifica, converti, traduci, unisci, dividi, proteggi, analizza) | Tutto funziona come nella suite completa | ☐ |
+| P6 | OCR incluso | Analizza/traduci un PDF scansionato | L'OCR funziona (rapidocr è incluso anche in questa build) | ☐ |
+| P7 | Niente audio/immagini | Ispezionare `dist\PdfManager\` | Nessuna traccia di `ffmpeg`, `scipy`, `pydub`, `soundfile`; cartella sensibilmente più piccola di `dist\MultimediaMaster\` | ☐ |
+| P8 | Log di crash separati | Provocare un errore | Log in `logs\pdf_manager_crash.log` accanto all'exe (ripiego: `%TEMP%\PdfManager\logs`, **non** `%TEMP%\MultimediaMaster`) | ☐ |
+| P9 | Suite non regredita | Rifare `build.bat` dopo `build-pdf.bat` | La suite completa si costruisce e funziona esattamente come prima (le due build non si disturbano: workpath e dist separati) | ☐ |
 
 ---
 

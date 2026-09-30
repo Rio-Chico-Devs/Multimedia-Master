@@ -18,6 +18,7 @@ import customtkinter as ctk
 from common.ui.geometry import fit_window
 from common.ui.icon import apply_icon
 from common.ui.about import add_about_button
+from common.version import is_standalone
 
 from .edit_tab      import EditTab
 from .convert_tab   import ConvertTab
@@ -36,7 +37,10 @@ class PdfWindow(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.title("Gestione PDF — Multimedia Master")
+        # Inside the suite the title says which tool this window belongs to;
+        # as a standalone product there is no suite to belong to.
+        self.title("Gestione PDF" if is_standalone()
+                   else "Gestione PDF — Multimedia Master")
         apply_icon(self)
         fit_window(self, 960, 680, 760, 520)
         add_about_button(self, "Gestione PDF")
