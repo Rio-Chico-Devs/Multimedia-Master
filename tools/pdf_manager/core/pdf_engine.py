@@ -2,7 +2,7 @@
 PDF Engine — pure business logic, zero UI dependencies.
 
 Every public method returns a result dataclass.
-Optional libraries (rapidocr_onnxruntime, pdfplumber) are imported lazily;
+Optional libraries (pdfplumber) are imported lazily;
 the engine degrades gracefully when they are not available.
 """
 
@@ -57,7 +57,7 @@ class PdfAnalysis:
     encrypted:        bool
     has_acroform:     bool
     form_fields:      list[str]         # AcroForm field names
-    suggested_fields: list[str]         # visually detected (OCR/pattern)
+    suggested_fields: list[str]         # detected by text pattern
     metadata:         dict[str, str]
 
 
@@ -69,7 +69,7 @@ class PdfEngine:
 
     Dependencies:
       required : pypdf, reportlab, Pillow
-      optional : pdfplumber (richer text extraction), rapidocr_onnxruntime (OCR)
+      optional : pdfplumber (richer text extraction)
     """
 
     # ── Images → PDF ──────────────────────────────────────────────────────────
@@ -78,28 +78,16 @@ class PdfEngine:
         self,
         images:       list[Path],
         output:       Path,
-        ocr:          bool = False,
         one_per_file: bool = False,
     ) -> list[PdfResult]:
         """Convert image files to PDF(s). Returns one result per output file."""
         if one_per_file:
             results = []
             for img in images:
-                out = output.parent / (img.stem + ".pdf")
-                out = self._unique_path(out)
-                results.append(self._img_to_pdf(img, out, ocr))
+                out = self._unique_path(output.parent / (img.stem + ".pdf"))
+                results.append(self._reportlab_to_pdf([img], out))
             return results
-        else:
-            return [self._imgs_to_single_pdf(images, output, ocr)]
-
-    def _img_to_pdf(self, img: Path, output: Path, ocr: bool) -> PdfResult:
-        return self._ocr_to_pdf([img], output) if ocr \
-               else self._reportlab_to_pdf([img], output)
-
-    def _imgs_to_single_pdf(self, images: list[Path], output: Path,
-                             ocr: bool) -> PdfResult:
-        return self._ocr_to_pdf(images, output) if ocr \
-               else self._reportlab_to_pdf(images, output)
+        return [self._reportlab_to_pdf(images, output)]
 
     def _reportlab_to_pdf(self, images: list[Path], output: Path) -> PdfResult:
         try:
@@ -117,51 +105,6 @@ class PdfEngine:
                     img_rgb.save(buf, format="JPEG", quality=92)
                     buf.seek(0)
                     c.drawImage(ImageReader(buf), 0, 0, w, h)
-                c.showPage()
-            c.save()
-            return self._ok(output)
-        except Exception as exc:
-            return PdfResult(output=output, success=False, error=str(exc))
-
-    def _ocr_to_pdf(self, images: list[Path], output: Path) -> PdfResult:
-        try:
-            from reportlab.pdfgen import canvas
-            from reportlab.lib.utils import ImageReader
-            from PIL import Image
-
-            from common.ocr_engine import ocr_available, ocr_image
-
-            if not ocr_available():
-                return PdfResult(
-                    output=output, success=False,
-                    error="OCR non disponibile: il motore OCR non è installato.")
-
-            c = canvas.Canvas(str(output))
-            for img_path in images:
-                with Image.open(img_path) as img:
-                    img_rgb = img.convert("RGB")
-                    w, h = img_rgb.size
-                    c.setPageSize((w, h))
-
-                    buf = io.BytesIO()
-                    img_rgb.save(buf, format="JPEG", quality=92)
-                    buf.seek(0)
-                    c.drawImage(ImageReader(buf), 0, 0, w, h)
-
-                    for r in ocr_image(img_rgb):
-                        text = r["text"]
-                        if not text:
-                            continue
-                        x0, y0, x1, y1 = r["bbox"]
-                        font_size = max(4.0, (y1 - y0) * 0.8)
-                        # Render mode 3 = invisible (neither filled nor
-                        # stroked) but still selectable/searchable text,
-                        # laid directly over the original scanned image.
-                        t = c.beginText(x0, h - y1)
-                        t.setTextRenderMode(3)
-                        t.setFont("Helvetica", font_size)
-                        t.textOut(text)
-                        c.drawText(t)
                 c.showPage()
             c.save()
             return self._ok(output)

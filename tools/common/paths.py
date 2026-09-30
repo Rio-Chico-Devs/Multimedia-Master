@@ -22,7 +22,7 @@ def exe_dir() -> Path:
 
 
 def resource_dir() -> Path:
-    """Directory holding bundled read-only resources (assets/, vendor/).
+    """Directory holding bundled read-only resources (assets/).
 
     NOT the same as exe_dir(). PyInstaller unpacks bundled data to
     sys._MEIPASS, which is a temporary directory in a onefile build and the

@@ -2,7 +2,6 @@
 Convert Tab — images → PDF
   • Select multiple images (browse / folder / drag-and-drop)
   • Optional: one PDF per image vs. single merged PDF
-  • Optional: OCR (RapidOCR, fully bundled — no separate install)
   • Output directory chooser
 """
 from __future__ import annotations
@@ -57,17 +56,6 @@ class ConvertTab(ctk.CTkFrame):
             anchor="w", padx=16, pady=2)
         ctk.CTkRadioButton(right, text="Un PDF per immagine",
                            variable=self._mode, value="per_file").pack(
-            anchor="w", padx=16, pady=2)
-
-        Separator(right).pack(pady=(8, 0))
-
-        # OCR
-        SectionLabel(right, "OCR (testo ricercabile)").pack(
-            fill="x", padx=12, pady=(8, 2))
-        self._ocr_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(right,
-                        text="Attiva OCR  (testo ricercabile sopra la scansione)",
-                        variable=self._ocr_var).pack(
             anchor="w", padx=16, pady=2)
 
         Separator(right).pack(pady=(8, 0))
@@ -154,7 +142,6 @@ class ConvertTab(ctk.CTkFrame):
         output  = out_dir / name
 
         one_per = self._mode.get() == "per_file"
-        ocr     = self._ocr_var.get()
 
         # Overwrite check applies only to single-file mode.
         if not one_per and output.exists():
@@ -175,11 +162,11 @@ class ConvertTab(ctk.CTkFrame):
 
         threading.Thread(
             target=self._worker,
-            args=(images, output, ocr, one_per),
+            args=(images, output, one_per),
             daemon=True,
         ).start()
 
-    def _worker(self, images, output, ocr, one_per):
+    def _worker(self, images, output, one_per):
         try:
             if one_per:
                 # Process each image individually so cancel takes effect between files.
@@ -209,7 +196,6 @@ class ConvertTab(ctk.CTkFrame):
                         results = self._engine.images_to_pdf(
                             images=[img],
                             output=per_file_output,
-                            ocr=ocr,
                             one_per_file=False,
                         )
                         if results and results[0].success:
@@ -236,7 +222,6 @@ class ConvertTab(ctk.CTkFrame):
                 results = self._engine.images_to_pdf(
                     images=images,
                     output=output,
-                    ocr=ocr,
                     one_per_file=False,
                 )
                 ok   = [r for r in results if r.success]

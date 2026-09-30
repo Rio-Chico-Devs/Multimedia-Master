@@ -12,9 +12,3 @@ __pycache__/
 /dist/
 *.spec.bak
 
-# Vendored OCR model files — large, per-build-machine files the developer
-# copies in once before packaging (see vendor/rapidocr/README.md).
-# Never commit the actual model files to git.
-/vendor/rapidocr/*
-!/vendor/rapidocr/README.md
-

@@ -1,13 +1,12 @@
 """
 PDF Manager main window.
-Seven tabs inside a CTkTabview:
+Six tabs inside a CTkTabview:
   1. Modifica    — visual editor (snip, drag, insert space)
-  2. Converti    — images → PDF (with optional OCR)
-  3. Traduci     — in-place translation, same layout
-  4. Unisci      — merge multiple PDFs
-  5. Dividi      — split by ranges or every N pages
-  6. Proteggi    — encrypt / decrypt
-  7. Analizza    — text, metadata, form fields, summary
+  2. Converti    — images → PDF
+  3. Unisci      — merge multiple PDFs
+  4. Dividi      — split by ranges or every N pages
+  5. Proteggi    — encrypt / decrypt
+  6. Analizza    — text, metadata, form fields, summary
 """
 from __future__ import annotations
 
@@ -22,7 +21,6 @@ from common.version import IS_STANDALONE, PRODUCT_NAME
 
 from .edit_tab      import EditTab
 from .convert_tab   import ConvertTab
-from .translate_tab import TranslateTab
 from .merge_tab     import MergeTab
 from .split_tab     import SplitTab
 from .protect_tab   import ProtectTab
@@ -90,16 +88,7 @@ class PdfWindow(ctk.CTk):
         pdfs   = [p for p in paths if p.suffix.lower() == ".pdf" and p.is_file()]
         images = [p for p in paths if p.suffix.lower() in IMAGE_EXTS and p.is_file()]
 
-        active_tab = None
-        if hasattr(self, "_tabs"):
-            try:
-                active_tab = self._tabs.get()
-            except Exception:
-                pass
-
-        if pdfs and active_tab == "Traduci" and hasattr(self, "_translate_tab"):
-            self._translate_tab.set_file(pdfs[0])
-        elif pdfs and hasattr(self, "_merge_list"):
+        if pdfs and hasattr(self, "_merge_list"):
             self._merge_list._add_paths(pdfs)
         elif images and hasattr(self, "_img_list"):
             self._img_list._add_paths(images)
@@ -124,14 +113,14 @@ class PdfWindow(ctk.CTk):
         self._tabs = tabs
         self._built_tabs: set[str] = set()
 
-        for name in ("Modifica", "Converti", "Traduci", "Unisci",
+        for name in ("Modifica", "Converti", "Unisci",
                      "Dividi", "Proteggi", "Analizza"):
             tabs.add(name)
 
         # Modifica is the tab shown on startup, so build it eagerly; the
-        # other six are built lazily on first selection (see _on_tab_change)
-        # — constructing all seven CTk widget trees upfront is the main
-        # remaining cost of opening this window.
+        # other five are built lazily on first selection (see _on_tab_change)
+        # — constructing every CTk widget tree upfront is the main remaining
+        # cost of opening this window.
         self._build_tab("Modifica")
 
     def _on_tab_change(self) -> None:
@@ -155,10 +144,6 @@ class PdfWindow(ctk.CTk):
             convert = ConvertTab(container)
             convert.pack(fill="both", expand=True)
             self._img_list = convert._file_list       # ImageFileList
-        elif name == "Traduci":
-            translate = TranslateTab(container)
-            translate.pack(fill="both", expand=True)
-            self._translate_tab = translate
         elif name == "Unisci":
             merge = MergeTab(container)
             merge.pack(fill="both", expand=True)

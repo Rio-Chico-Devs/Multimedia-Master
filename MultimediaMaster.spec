@@ -144,18 +144,11 @@ hiddenimports = []
 # owns it: anything in _SHARED or _PDF ships in BOTH products, anything in
 # _AUDIO ships only in the full suite.
 
-# Needed by common/ (OCR, window icon, dialogs) and by every tool.
+# Needed by common/ (window icon, dialogs) and by every tool.
 _THIRD_PARTY_SHARED = [
     "customtkinter",
     "PIL",
     "tkinterdnd2",
-    "numpy",
-    # common/ocr_engine.py -> rapidocr, plus its runtime dependencies
-    "rapidocr_onnxruntime",
-    "onnxruntime",
-    "cv2",
-    "shapely",
-    "pyclipper",
 ]
 
 # Needed by tools/pdf_manager/.
@@ -164,17 +157,13 @@ _THIRD_PARTY_PDF = [
     "reportlab",
     "fitz",          # pymupdf's import name
     "pdfplumber",
-    "argostranslate",
-    "ctranslate2",   # argostranslate's inference backend
-    "sentencepiece",
-    "wordninja",
-    "spellchecker",
 ]
 
 # Needed by tools/audio_manager/ only. imageio_ffmpeg alone carries a full
 # ffmpeg binary, so dropping this group is most of what makes the standalone
 # PDF Manager smaller than the suite.
 _THIRD_PARTY_AUDIO = [
+    "numpy",         # only the audio tool computes on arrays
     "pydub",
     "imageio_ffmpeg",
     "soundfile",
@@ -200,26 +189,6 @@ for _pkg in _THIRD_PARTY:
     datas += _d
     binaries += _b
     hiddenimports += _h
-
-# Bundle a vendored RapidOCR "latin" model (Italian/French/German/Spanish
-# recognition) if the developer placed one at vendor/rapidocr/ before
-# building (see vendor/rapidocr/README.md). Optional: rapidocr_onnxruntime's
-# own stock Chinese+English model is already collected above regardless, so
-# the build still succeeds and OCR still works for English without this —
-# this only improves accented-Latin-script recognition.
-#
-# Only the model files themselves are collected, by name. Copying the whole
-# folder would also ship vendor/rapidocr/README.md — build instructions
-# addressed to whoever packages the exe, which that file opens by saying it
-# is "not for end users" — into every customer's install directory.
-# common.ocr_engine checks for each of these individually and falls back to
-# the stock model for any that is absent, so shipping a subset (or none) is
-# safe.
-_VENDOR_RAPIDOCR = ROOT / "vendor" / "rapidocr"
-for _model in ("det.onnx", "rec.onnx", "keys.txt", "cls.onnx"):
-    _model_path = _VENDOR_RAPIDOCR / _model
-    if _model_path.is_file():
-        datas.append((str(_model_path), "vendor/rapidocr"))
 
 a = Analysis(
     [_ENTRY],

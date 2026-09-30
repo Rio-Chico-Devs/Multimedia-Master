@@ -11,8 +11,6 @@ It checks, in order:
   3. The real pypdf code paths (merge / split / encrypt / decrypt) — this is
      the riskiest area because pypdf jumped a major version (5.x -> 6.x).
   4. A Pillow 12 image round-trip (open / convert / save).
-  5. The offline-translation source cleanup we added (de-hyphenation +
-     wordninja word de-gluing).
 
 Exit code is 0 only if nothing FAILED (SKIP is allowed, e.g. an optional
 package not installed). Anything FAILED -> exit 1, so this can gate a build.
@@ -48,8 +46,7 @@ def check_versions() -> None:
         "pillow": "12.2.0",   # security floor
         "pypdf":  "6.13.3",   # security floor
     }
-    optional = ["argostranslate", "stanza", "ctranslate2", "wordninja",
-                "pyspellchecker", "pymupdf", "rapidocr-onnxruntime"]
+    optional = ["pymupdf"]
     for pkg, floor in wanted.items():
         try:
             v = md.version(pkg)
@@ -69,7 +66,7 @@ def check_imports() -> None:
     print("\n[2] Imports")
     core = ["PIL", "pypdf", "reportlab", "fitz", "pdfplumber",
             "customtkinter", "numpy", "scipy", "soundfile", "mutagen", "pydub"]
-    optional = ["rapidocr_onnxruntime", "argostranslate.translate", "wordninja"]
+    optional: list[str] = []
     for mod in core:
         try:
             __import__(mod)
@@ -202,178 +199,8 @@ def check_pillow() -> None:
         _record("FAIL", "PNG->JPEG convert", str(exc))
 
 
-def check_translation_cleanup() -> None:
-    print("\n[5] Translation source cleanup")
-    try:
-        from core.pdf_translator_engine import _join_lines
-        out = _join_lines(["attach-", "ments are designed"])
-        _record("PASS" if out == "attachments are designed" else "FAIL",
-                "de-hyphenation", out)
-    except Exception as exc:
-        _record("FAIL", "de-hyphenation", str(exc))
-
-    # Section grouping must rebuild a body paragraph from its wrapped lines yet
-    # refuse to fuse a separate block (caption) sitting right under it.
-    try:
-        from core.pdf_translator_engine import _group_into_paragraphs
-        lines = [
-            {"bbox": (50, 100, 300, 110), "text": "The power take-off lets the",
-             "size": 10, "color": 0, "font": "", "block": 0},
-            {"bbox": (50, 111, 300, 121), "text": "operator drive an implement.",
-             "size": 10, "color": 0, "font": "", "block": 0},
-            {"bbox": (50, 123, 300, 133), "text": "Fig. 2 — the rear hitch.",
-             "size": 10, "color": 0, "font": "", "block": 1},
-        ]
-        paras = _group_into_paragraphs(lines)
-        ok = (len(paras) == 2
-              and paras[0]["text"] == "The power take-off lets the "
-                                      "operator drive an implement."
-              and paras[1]["text"].startswith("Fig. 2"))
-        _record("PASS" if ok else "FAIL", "block-aware grouping",
-                f"{len(paras)} sezioni")
-    except Exception as exc:
-        _record("FAIL", "block-aware grouping", str(exc))
-
-    try:
-        from core.translate_engine import _split_glued_word, _get_wordninja
-        if _get_wordninja() is None:
-            _record("SKIP", "word de-gluing", "wordninja not installed")
-        else:
-            out = _split_glued_word("POWERUNITS")
-            _record("PASS" if out == "POWER UNITS" else "FAIL",
-                    "word de-gluing", f"POWERUNITS -> {out}")
-            # glued run that contains the lone real words "a"/"i" — used to be
-            # rejected by the old >=2-chars-per-piece rule
-            out2 = _split_glued_word("Apusherhasthepower")
-            ok2 = len(out2.split()) >= 4 and out2.lower().split()[0] == "a"
-            _record("PASS" if ok2 else "FAIL",
-                    "word de-gluing (a/i)", f"Apusherhasthepower -> {out2}")
-    except Exception as exc:
-        _record("FAIL", "word de-gluing", str(exc))
-
-    try:
-        from core.translate_engine import _get_speller, _preprocess_source
-        if _get_speller("en") is None:
-            _record("SKIP", "OCR spell correction", "pyspellchecker not installed")
-        else:
-            out = _preprocess_source("1n the meantime your BCS warranty", "en")
-            ok = "in the meantime" in out.lower() and "BCS" in out
-            _record("PASS" if ok else "FAIL", "OCR spell correction",
-                    f"1n ... BCS -> {out!r}")
-    except Exception as exc:
-        _record("FAIL", "OCR spell correction", str(exc))
-
-    try:
-        from core import nllb_engine
-        codes = nllb_engine.language_codes()
-        ok = codes.get("it") == "ita_Latn" and codes.get("en") == "eng_Latn"
-        _record("PASS" if ok else "FAIL", "NLLB language table",
-                f"{len(codes)} languages, it={codes.get('it')}")
-    except Exception as exc:
-        _record("FAIL", "NLLB language table", str(exc))
-
-    # A paragraph over the model's token limit must be split, not truncated —
-    # including one with no sentence-ending punctuation (OCR lists, tables).
-    try:
-        from core.translate_engine import split_for_model
-        def _count(s):
-            return len(s.split()) + 2
-        punct = " ".join(f"Sentence number {i} is here." for i in range(20))
-        plain = " ".join(f"word{i}" for i in range(200))
-        ok = True
-        for name, txt in (("punctuated", punct), ("unpunctuated", plain)):
-            parts = split_for_model(txt, 20, _count)
-            if len(parts) < 2 or any(_count(p) > 20 for p in parts):
-                ok = False
-            if " ".join(parts).split() != txt.split():
-                ok = False      # content lost or reordered
-        _record("PASS" if ok else "FAIL", "model input chunking",
-                "long paragraphs split without losing text")
-    except Exception as exc:
-        _record("FAIL", "model input chunking", str(exc))
-
-    # A short glossary term must not swallow a longer one containing it.
-    try:
-        from core.translate_engine import _protect_glossary
-        g = {"power": "potenza", "power unit": "gruppo motore"}
-        prot, toks = _protect_glossary("the power unit is here", g)
-        for tk, val in toks.items():
-            prot = prot.replace(tk, val)
-        ok = "gruppo motore" in prot and "potenza unit" not in prot
-        _record("PASS" if ok else "FAIL", "glossary longest-term-first", prot)
-    except Exception as exc:
-        _record("FAIL", "glossary longest-term-first", str(exc))
-
-    # insert_textbox() writes NOTHING when the text cannot fit; the original is
-    # already redacted by then, so the return code must reach the caller.
-    try:
-        from core.pdf_translator_engine import _insert_autoshrink
-
-        class _Pg:
-            def __init__(self, fits):
-                self.fits = fits
-            def insert_textbox(self, rect, text, fontsize, fontname, color,
-                               align, rotate):
-                return 1.0 if self.fits(fontsize) else -1.0
-
-        fits_now   = _insert_autoshrink(_Pg(lambda s: True), None, "x", 10.0,
-                                        (0, 0, 0), "helv")
-        fits_small = _insert_autoshrink(_Pg(lambda s: s <= 7.0), None, "x", 12.0,
-                                        (0, 0, 0), "helv")
-        never      = _insert_autoshrink(_Pg(lambda s: False), None, "x", 9.0,
-                                        (0, 0, 0), "helv")
-        ok = fits_now is True and fits_small is True and never is False
-        _record("PASS" if ok else "FAIL", "autoshrink reports overflow",
-                f"fits={fits_now}, shrunk={fits_small}, never={never}")
-    except Exception as exc:
-        _record("FAIL", "autoshrink reports overflow", str(exc))
-
-    # Picking mBART in the engine menu must not load the tokenizer (which falls
-    # back to a network fetch) — the app advertises itself as fully offline.
-    try:
-        from core import mbart_engine as _me
-        _saved = _me._load_tokenizer
-
-        def _boom(*a, **k):
-            raise AssertionError("language_codes() loaded the tokenizer")
-
-        _me._load_tokenizer = _boom
-        try:
-            _codes = _me.language_codes()
-            ok = _codes.get("it") == "it_IT" and len(_codes) >= 50
-        finally:
-            _me._load_tokenizer = _saved
-        _record("PASS" if ok else "FAIL", "mBART language table static",
-                f"{len(_codes)} languages, no tokenizer load")
-    except Exception as exc:
-        _record("FAIL", "mBART language table static", str(exc))
-
-    # Text already cleaned (and possibly hand-edited on the review screen) must
-    # not be run through the cleanup a second time.
-    try:
-        from core import translate_engine as _te
-        seen = []
-        _orig = _te._preprocess_source
-        _te._preprocess_source = lambda t, s: (seen.append(t), _orig(t, s))[1]
-        try:
-            import types as _types
-            _fake = _types.ModuleType("argostranslate.translate")
-            _fake.translate = lambda c, s, t: c
-            sys.modules.setdefault("argostranslate",
-                                   _types.ModuleType("argostranslate"))
-            sys.modules["argostranslate.translate"] = _fake
-            _te.translate_text("abc def", "en", "it", preprocess=False)
-            ok = not seen
-        finally:
-            _te._preprocess_source = _orig
-        _record("PASS" if ok else "FAIL", "review edits not re-cleaned",
-                "preprocess=False skips cleanup")
-    except Exception as exc:
-        _record("FAIL", "review edits not re-cleaned", str(exc))
-
-
 def check_audio_engine() -> None:
-    print("\n[6] Audio engine (format mapping / ID3v1 / voice effects)")
+    print("\n[5] Audio engine (format mapping / ID3v1 / voice effects)")
     # Each tool owns a top-level package literally named `core`, and the PDF
     # one is already bound in sys.modules from section [5]. Drop it and put
     # audio_manager first so `core.audio_engine` resolves to the audio tool.
@@ -431,7 +258,6 @@ def main() -> int:
     check_imports()
     check_pypdf()
     check_pillow()
-    check_translation_cleanup()
     check_audio_engine()
 
     n_fail = sum(1 for s, _, _ in _results if s == "FAIL")
