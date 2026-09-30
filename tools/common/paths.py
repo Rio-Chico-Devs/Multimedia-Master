@@ -21,6 +21,21 @@ def exe_dir() -> Path:
     return Path(__file__).resolve().parent.parent.parent
 
 
+def resource_dir() -> Path:
+    """Directory holding bundled read-only resources (assets/, vendor/).
+
+    NOT the same as exe_dir(). PyInstaller unpacks bundled data to
+    sys._MEIPASS, which is a temporary directory in a onefile build and the
+    _internal/ subfolder next to the exe in a onedir build — in neither case
+    the directory the exe itself sits in. Resolving a bundled asset against
+    exe_dir() therefore yields a path that does not exist, and callers that
+    treat a missing asset as cosmetic (see common.ui.icon) then fail without
+    saying anything.
+    """
+    base = getattr(sys, "_MEIPASS", None)
+    return Path(base) if base else exe_dir()
+
+
 def _data_dir_name() -> str:
     """Per-user data folder name, distinct for each product built from this
     source tree, so two installed products never share a log directory — and
@@ -34,12 +49,30 @@ def _data_dir_name() -> str:
 
 def icon_path() -> Path:
     """Path to the app icon, stable across dev mode and frozen builds."""
-    return exe_dir() / "assets" / "icon.ico"
+    return resource_dir() / "assets" / "icon.ico"
+
+
+def _user_log_dir() -> Path:
+    """Per-user log directory, for builds that must not write beside the exe."""
+    from common.version import PRODUCT_SLUG
+    return Path.home() / f".{PRODUCT_SLUG}" / "logs"
 
 
 def crash_log_path(tool_name: str) -> Path:
     """Stable, writable crash-log location for `tool_name`."""
     if getattr(sys, "frozen", False):
+        from common.version import IS_ONEFILE
+        if IS_ONEFILE:
+            # A single-file build is meant to be dropped anywhere — the
+            # desktop, a USB stick, Downloads. Writing a logs\ folder beside
+            # it would litter whatever directory the user picked, so logs go
+            # to the per-user data folder alongside settings instead.
+            log_dir = _user_log_dir()
+            try:
+                log_dir.mkdir(parents=True, exist_ok=True)
+                return log_dir / f"{tool_name}_crash.log"
+            except OSError:
+                pass   # fall through to the temp-dir fallback below
         log_dir = exe_dir() / "logs"
         try:
             log_dir.mkdir(parents=True, exist_ok=True)

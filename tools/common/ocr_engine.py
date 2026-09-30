@@ -26,11 +26,8 @@ _engine_failed = False
 
 
 def _vendor_dir() -> Path | None:
-    base = getattr(sys, "_MEIPASS", None)
-    if base:
-        d = Path(base) / "vendor" / "rapidocr"
-    else:
-        d = Path(__file__).resolve().parent.parent.parent / "vendor" / "rapidocr"
+    from common.paths import resource_dir
+    d = resource_dir() / "vendor" / "rapidocr"
     return d if d.is_dir() else None
 
 

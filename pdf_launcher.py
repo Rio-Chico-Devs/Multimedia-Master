@@ -17,10 +17,11 @@ module docstring for why tools/ is data and not analyzed code.
 import sys
 from pathlib import Path
 
-# Under PyInstaller, __file__ resolves inside the bundle, where tools/ was
-# collected as data — so this is the bundle root in a frozen build and the
-# project root in dev mode, and tools/ sits under it either way.
-ROOT = Path(__file__).parent
+# Where tools/ actually lives. sys._MEIPASS is PyInstaller's unpacked bundle:
+# a temporary directory in a onefile build, the _internal/ folder next to the
+# exe in a onedir build. Neither is the directory holding the exe, so this is
+# stated explicitly rather than inferred from __file__.
+ROOT = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).parent)
 sys.path.insert(0, str(ROOT / "tools"))
 
 if __name__ == "__main__":

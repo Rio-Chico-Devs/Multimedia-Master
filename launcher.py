@@ -4,7 +4,9 @@ from pathlib import Path
 
 import customtkinter as ctk
 
-ROOT = Path(__file__).parent
+# Where tools/ actually lives — PyInstaller's unpacked bundle when frozen
+# (see pdf_launcher.py), the project root in dev mode.
+ROOT = Path(getattr(sys, "_MEIPASS", None) or Path(__file__).parent)
 sys.path.insert(0, str(ROOT / "tools"))
 from common.version import __version__, PRODUCT_NAME
 from common.ui.geometry import fit_window

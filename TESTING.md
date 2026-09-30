@@ -32,12 +32,22 @@ manifestano i problemi di console, ffmpeg e PyInstaller).
 ### 0b. Build separata del solo PDF Manager
 
 Prodotto a sé, senza launcher e senza convertitore immagini / audio manager.
-Si costruisce dallo stesso `MultimediaMaster.spec` (variabile `MM_TARGET`).
+Si costruisce dallo stesso `MultimediaMaster.spec` (variabili `MM_TARGET` e
+`MM_ONEFILE`).
+
+| Comando | Risultato | Avvio |
+|---|---|---|
+| `build-pdf.bat` | `dist\PdfManager.exe` — **un solo file**, da trascinare ovunque | lento (si scompatta ogni volta) |
+| `build.bat pdf` | `dist\PdfManager\` — cartella + zip | istantaneo |
 
 | ID | Test | Passi | Risultato atteso | Esito |
 |----|------|-------|------------------|:----:|
-| P1 | Build PDF-only | Eseguire `build-pdf.bat` | Nessun errore; creato `dist\PdfManager\PdfManager.exe` e lo zip `PdfManager-<ver>-win64.zip` | ☐ |
-| P2 | Avvio diretto | Doppio click su `PdfManager.exe` | Si apre **direttamente** Gestione PDF — nessuna finestra launcher, nessuna console | ☐ |
+| P1 | Build file unico | Eseguire `build-pdf.bat` | Nessun errore; creato `dist\PdfManager.exe`, **nessuna cartella** `dist\PdfManager\` | ☐ |
+| P1b | Davvero autonomo | Copiare **solo** `PdfManager.exe` sul desktop di un PC pulito, cancellare `dist` | Parte e funziona senza nessun altro file accanto | ☐ |
+| P1c | Attesa all'avvio | Cronometrare il doppio click | Qualche secondo prima che compaia la finestra, **a ogni avvio** — è il prezzo del file unico, non un difetto | ☐ |
+| P1d | Build a cartella | Eseguire `build.bat pdf` | Creato `dist\PdfManager\PdfManager.exe` + zip; avvio istantaneo | ☐ |
+| P2 | Avvio diretto | Doppio click sull'exe | Si apre **direttamente** Gestione PDF — nessuna finestra launcher, nessuna console | ☐ |
+| P2b | Icona della finestra | Guardare l'angolo della finestra e la barra applicazioni | Compare l'icona del programma, non quella generica di Windows (valeva anche per la suite: era rotta in silenzio) | ☐ |
 | P3 | Titolo finestra | Guardare la barra del titolo | Dice solo `Gestione PDF` | ☐ |
 | P4 | Finestra Informazioni | Click sulla ⓘ in alto a destra | Dice `PDF Manager` + versione | ☐ |
 | P5 | Funzioni PDF complete | Provare ogni scheda (modifica, converti, traduci, unisci, dividi, proteggi, analizza) | Tutto funziona come nella suite completa | ☐ |
@@ -52,7 +62,8 @@ acquistato. Verifiche mirate:
 |----|------|-------|------------------|:----:|
 | P8 | Ricerca testuale | In PowerShell, dentro `dist\PdfManager`: `Get-ChildItem -Recurse -File \| Select-String -Pattern "multimedia","image_converter","audio_manager" -List` | **Nessun risultato** | ☐ |
 | P9 | Cartella impostazioni | Usare l'app, poi guardare in `C:\Users\<nome>` | Esiste `.pdf_manager\settings.json` — **non** `.multimedia_master` | ☐ |
-| P10 | Log di crash | Provocare un errore | Log in `logs\pdf_manager_crash.log` accanto all'exe (ripiego: `%TEMP%\PdfManager\logs`) | ☐ |
+| P10 | Log di crash (file unico) | Provocare un errore | Log in `C:\Users\<nome>\.pdf_manager\logs\` — e **nessuna cartella `logs`** creata accanto all'exe, che sporcherebbe il desktop | ☐ |
+| P10b | Log di crash (cartella) | Idem sulla build `build.bat pdf` | Log in `logs\` accanto all'exe, come nella suite | ☐ |
 | P11 | Notifica desktop | Far finire un lavoro lungo con la finestra in secondo piano | Il toast di Windows è attribuito a `PDF Manager` | ☐ |
 | P12 | Niente file da sviluppatore | Ispezionare `dist\PdfManager\` | Nessun `assets\generate_icon.py`, nessun `vendor\rapidocr\README.md` | ☐ |
 

@@ -1,9 +1,11 @@
 @echo off
-REM Build Multimedia Master into a standalone Windows exe (onedir build).
+REM Build a Windows exe (see MultimediaMaster.spec for what each target is).
 REM
-REM   build.bat          full suite  -> dist\MultimediaMaster\MultimediaMaster.exe
-REM   build.bat pdf      PDF only    -> dist\PdfManager\PdfManager.exe
-REM                                     (or just run build-pdf.bat)
+REM   build.bat          full suite -> dist\MultimediaMaster\MultimediaMaster.exe
+REM   build.bat pdf      PDF only   -> dist\PdfManager\PdfManager.exe
+REM
+REM Set MM_ONEFILE=1 beforehand to get a single self-contained .exe instead of
+REM a folder (build-pdf.bat does this for you).
 REM
 REM Run this from the project root. If a venv exists (created by setup.bat)
 REM it is activated automatically; otherwise the current Python environment is
@@ -24,8 +26,24 @@ if /i "%MM_TARGET%"=="all" (
     exit /b 1
 )
 
+REM Accept the same spellings the spec does, so the paths reported at the end
+REM can never disagree with what was actually built.
+set ONEFILE=0
+if /i "%MM_ONEFILE%"=="1"    set ONEFILE=1
+if /i "%MM_ONEFILE%"=="true" set ONEFILE=1
+if /i "%MM_ONEFILE%"=="yes"  set ONEFILE=1
+if /i "%MM_ONEFILE%"=="on"   set ONEFILE=1
+
+if "%ONEFILE%"=="1" (
+    set WORK_NAME=%APP_NAME%-onefile
+    set MODE_LABEL=single file
+) else (
+    set WORK_NAME=%APP_NAME%
+    set MODE_LABEL=folder
+)
+
 echo.
-echo Building: %APP_LABEL%
+echo Building: %APP_LABEL% - %MODE_LABEL%
 echo.
 
 if exist venv\Scripts\activate.bat call venv\Scripts\activate.bat
@@ -53,18 +71,46 @@ if not errorlevel 1 (
     )
 )
 
-REM Per-target work and output folders, so building one product never reuses
-REM the other's cached analysis or wipes its dist folder. Both targets share
-REM one spec file, which would otherwise share one build\MultimediaMaster
+REM Per-target, per-mode work folder, so no build ever reuses another's cached
+REM analysis. All targets share one spec file, which would otherwise share one
 REM workpath and silently mix their collected dependencies.
-rmdir /s /q build\%APP_NAME% 2>nul
-rmdir /s /q dist\%APP_NAME% 2>nul
+rmdir /s /q build\%WORK_NAME% 2>nul
+if "%ONEFILE%"=="1" (
+    del /q "dist\%APP_NAME%.exe" 2>nul
+) else (
+    rmdir /s /q dist\%APP_NAME% 2>nul
+)
 
-pyinstaller --workpath build\%APP_NAME% MultimediaMaster.spec
+pyinstaller --workpath build\%WORK_NAME% MultimediaMaster.spec
 
 if errorlevel 1 (
     echo.
     echo BUILD FAILED - see the PyInstaller output above.
+    exit /b 1
+)
+
+if "%ONEFILE%"=="1" (
+    if not exist "dist\%APP_NAME%.exe" (
+        echo.
+        echo BUILD FAILED - dist\%APP_NAME%.exe was not produced.
+        exit /b 1
+    )
+    echo.
+    echo ===========================================================================
+    echo  Done: dist\%APP_NAME%.exe
+    echo.
+    echo  That single file IS the program. Copy it anywhere - desktop, USB stick -
+    echo  and double-click it. Nothing else needs to go with it.
+    echo.
+    echo  Every launch takes a few seconds: the exe unpacks itself to a temporary
+    echo  folder each time it starts. That is normal for a single-file build.
+    echo ===========================================================================
+    goto :done
+)
+
+if not exist "dist\%APP_NAME%\%APP_NAME%.exe" (
+    echo.
+    echo BUILD FAILED - dist\%APP_NAME%\%APP_NAME%.exe was not produced.
     exit /b 1
 )
 
@@ -85,5 +131,7 @@ if errorlevel 1 (
 
 echo.
 echo Distribution zip ready: dist\%ZIP_NAME%
+echo Distribute the WHOLE folder or that zip - the exe alone will not run.
 
+:done
 endlocal

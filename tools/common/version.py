@@ -26,23 +26,23 @@ __version__    = "2.1.0"
 __build_year__ = "2025"
 
 
-def _identity() -> tuple[str, str, bool]:
-    """(display name, slug, standalone?) of the running product."""
+def _identity() -> tuple[str, str, bool, bool]:
+    """(display name, slug, standalone?, single-file?) of the running product."""
     try:
         from common import _stamp
         return (_stamp.PRODUCT_NAME, _stamp.PRODUCT_SLUG,
-                _stamp.IS_STANDALONE)
+                _stamp.IS_STANDALONE, _stamp.IS_ONEFILE)
     except ImportError:
         # Dev mode: tools/common/version.py -> repo root.
         folder = Path(__file__).resolve().parents[2].name
         name = folder.replace("-", " ")
-        # A checkout unzipped from a lowercase archive name would otherwise
-        # put "multimedia master" in the title bar. Only touch it when the
-        # folder carries no capitals of its own, so a deliberately-cased
-        # directory name is left exactly as the developer wrote it.
+        # A checkout unzipped from an all-lowercase archive name would
+        # otherwise put a lowercase title in the title bar. Only touch it
+        # when the folder carries no capitals of its own, so a
+        # deliberately-cased directory name is left as the developer wrote it.
         if name == name.lower():
             name = name.title()
-        return name, folder.replace("-", "_").lower(), False
+        return name, folder.replace("-", "_").lower(), False, False
 
 
 #: Name shown to the user (title bars, About box, desktop notifications).
@@ -51,8 +51,10 @@ PRODUCT_NAME: str
 PRODUCT_SLUG: str
 #: True when this build holds a single tool and is sold on its own.
 IS_STANDALONE: bool
+#: True when everything ships inside one .exe that unpacks itself at launch.
+IS_ONEFILE: bool
 
-PRODUCT_NAME, PRODUCT_SLUG, IS_STANDALONE = _identity()
+PRODUCT_NAME, PRODUCT_SLUG, IS_STANDALONE, IS_ONEFILE = _identity()
 
 
 def product_name() -> str:

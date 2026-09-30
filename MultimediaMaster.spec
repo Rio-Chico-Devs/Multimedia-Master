@@ -78,7 +78,19 @@ _ENTRY, _NAME, _PRODUCT, _SLUG, _ALONE = {
             "PDF Manager",       "pdf_manager",       True),
 }[TARGET]
 
-print(f"[spec] MM_TARGET={TARGET} -> building {_PRODUCT} ({_NAME})")
+# Packaging mode, independent of which product is being built.
+#
+# onedir (default): a folder of files. Starts instantly and the whole folder
+#   must be distributed together.
+# onefile (MM_ONEFILE=1): a single self-extracting .exe that can be dropped
+#   anywhere and double-clicked. It unpacks its entire payload to a temporary
+#   directory on EVERY launch, so startup costs seconds, not milliseconds,
+#   and antivirus heuristics flag self-extracting executables more often.
+#   Chosen when handing a customer one file matters more than launch speed.
+ONEFILE = os.environ.get("MM_ONEFILE", "").strip().lower() in ("1", "true", "yes", "on")
+
+print(f"[spec] MM_TARGET={TARGET} -> building {_PRODUCT} ({_NAME}), "
+      f"{'onefile' if ONEFILE else 'onedir'}")
 
 # The PDF Manager needs only its own tree plus the shared common/ package
 # (crash log, OCR, settings, window icon) — it imports nothing from
@@ -113,7 +125,8 @@ _STAMP.write_text(
     'Do not edit and do not commit: it is rewritten on every build."""\n'
     f"PRODUCT_NAME = {_PRODUCT!r}\n"
     f"PRODUCT_SLUG = {_SLUG!r}\n"
-    f"IS_STANDALONE = {_ALONE!r}\n",
+    f"IS_STANDALONE = {_ALONE!r}\n"
+    f"IS_ONEFILE = {ONEFILE!r}\n",
     encoding="utf-8",
 )
 datas.append((str(_STAMP), "tools/common"))
@@ -222,11 +235,7 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
+_EXE_COMMON = dict(
     name=_NAME,
     debug=False,
     bootloader_ignore_signals=False,
@@ -236,11 +245,31 @@ exe = EXE(
     icon=str(ROOT / "assets" / "icon.ico"),
 )
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=False,
-    name=_NAME,
-)
+if ONEFILE:
+    # Everything goes inside the executable; there is no COLLECT step and no
+    # output folder — dist/<name>.exe IS the product.
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        **_EXE_COMMON,
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        **_EXE_COMMON,
+    )
+
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        name=_NAME,
+    )
