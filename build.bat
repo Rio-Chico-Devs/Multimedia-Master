@@ -20,7 +20,7 @@ if /i "%MM_TARGET%"=="all" (
     set APP_NAME=PdfManager
     set APP_LABEL=PDF Manager ^(standalone^)
 ) else (
-    echo Unknown target "%MM_TARGET%" — use "build.bat" or "build.bat pdf".
+    echo Unknown target "%MM_TARGET%" - use "build.bat" or "build.bat pdf".
     exit /b 1
 )
 
@@ -64,7 +64,7 @@ pyinstaller --workpath build\%APP_NAME% MultimediaMaster.spec
 
 if errorlevel 1 (
     echo.
-    echo BUILD FAILED — see the PyInstaller output above.
+    echo BUILD FAILED - see the PyInstaller output above.
     exit /b 1
 )
 
@@ -79,7 +79,7 @@ powershell -NoProfile -Command "Compress-Archive -Path 'dist\%APP_NAME%\*' -Dest
 
 if errorlevel 1 (
     echo.
-    echo ZIP step failed — distribute the dist\%APP_NAME% folder manually.
+    echo ZIP step failed - distribute the dist\%APP_NAME% folder manually.
     exit /b 1
 )
 
